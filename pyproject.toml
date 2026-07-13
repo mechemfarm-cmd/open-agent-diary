@@ -3,14 +3,15 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-diary"
+name = "open-agent-diary"
 version = "0.1.0"
-description = "Local-first inspectable memory and work-trace store for human/agent collaboration"
+description = "Open Agent Diary: local-first inspectable memory and work-trace store for human/agent collaboration"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-  { name = "Agent Diary Contributors" }
+  { name = "Willard Mechem" }
 ]
+license = { text = "MIT" }
 dependencies = []
 
 [project.scripts]

@@ -1,6 +1,6 @@
-# Agent Diary
+# Open Agent Diary
 
-Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration.
+Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration.
 
 It separates three layers:
 
@@ -85,6 +85,10 @@ PYTHONPATH=src python3 -m compileall -q src scripts tests
 PYTHONPATH=src python3 -m agent_diary.cli.main --json doctor
 ```
 
+## Author
+
+Created by Willard Mechem.
+
 ## License
 
-License pending.
+MIT License. See `LICENSE`.
