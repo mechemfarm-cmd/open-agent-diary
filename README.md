@@ -19,6 +19,8 @@ pip install -e .
 agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
+On Debian/Ubuntu, install `python3-venv` first if `python3 -m venv` says `ensurepip` is unavailable.
+
 Then open:
 
 ```text
