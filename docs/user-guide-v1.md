@@ -136,7 +136,7 @@ V1 is not:
 - a full replacement for every future memory workflow
 - a polished consumer-grade release
 - a chain-of-thought dump
-- a fully auassistantatic always-correct derived-analysis layer
+- a fully automatic always-correct derived-analysis layer
 
 In particular, the work-trace layer is about meaningful operational provenance, not about storing every tiny internal thought or every byte of terminal output.
 
@@ -267,7 +267,7 @@ Use it to:
 - confirm import counts
 - apply scope to a specific import batch
 
-Clicking an import batch should narrow the browse/search context auassistantatically.
+Clicking an import batch should narrow the browse/search context automatically.
 
 This is important because Agent Diary becomes much easier to reason about when you are working inside one bounded import context rather than the full corpus.
 
@@ -350,7 +350,7 @@ Use the refresh controls when:
 - an annotation/correction changed the meaning of an entry
 - you want a fresh summary, memory layer, or open-loop analysis
 
-Do not assume derived layers are always auassistantatically current.
+Do not assume derived layers are always automatically current.
 
 V1 is more trustworthy when refresh is explicit and inspectable.
 

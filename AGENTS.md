@@ -7,7 +7,7 @@ Your job is to integrate with it.
 ## What Agent Diary Is
 
 - A local HTTP server (port 8041) that stores chat entries, derived memory, and work traces
-- A browser UI for the human to inspect and manipulate data
+- A browser UI for the human to search, inspect, annotate, and correct data
 - A daily import pipeline that converts your session transcripts into diary entries
 
 It is **not** a replacement for your working memory.
@@ -22,11 +22,13 @@ It is a permanent, inspectable, cross-session record that survives resets.
    pip install -e .
    ```
 
-2. Start the server:
+2. Start the server locally:
 
    ```bash
-   agent-diary serve --host 0.0.0.0 --port 8041
+   agent-diary serve --host 127.0.0.1 --port 8041
    ```
+
+   Bind to `0.0.0.0` or a private-network address only when the operator explicitly wants other trusted devices to connect.
 
 3. Schedule daily import:
 

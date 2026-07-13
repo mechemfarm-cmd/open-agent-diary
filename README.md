@@ -2,13 +2,13 @@
 
 Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration.
 
-It separates three layers:
+The app is built around a simple loop:
 
-1. **Raw entries** — what was said or imported.
-2. **Work traces** — what the agent actually did: commands, file edits, tests, tool calls.
-3. **Derived memory** — summaries, compressed memory, open loops, and other analysis artifacts.
+1. **Search or browse** for something you remember.
+2. **Read the source record** as the primary evidence.
+3. **Correct or inspect** supporting layers when needed.
 
-The core rule is simple: **derived memory is never the hidden source of truth.** Users can inspect the raw records and the derived layers that agents rely on.
+Under the hood it keeps raw entries, work traces, and generated search/summary artifacts separate. The core rule is simple: **generated memory is never the hidden source of truth.** Users can inspect the source records and the generated layers that agents rely on.
 
 ## Quick start
 
@@ -25,7 +25,9 @@ Then open:
 http://127.0.0.1:8041
 ```
 
-## Import sample data
+## Try it with synthetic sample data
+
+The repository ships with invented demo data only. Import it after starting your virtualenv:
 
 ```bash
 agent-diary import-session-jsonl --path examples/synthetic-session-import.jsonl --import-id demo
@@ -43,7 +45,7 @@ agent-diary doctor --json
 - SQLite metadata/search index
 - FTS5 acceleration for memory and work-trace search
 - Work-trace layer for operational evidence
-- Derived artifacts for conversation briefs, compressed memory, and open loops
+- Generated artifacts for summaries, search memory, and possible follow-ups
 - Read-only `doctor` command for consistency checks
 - Synthetic examples only — no real chat history ships with the project
 
@@ -71,11 +73,13 @@ The intended recall flow is:
 1. Query `/search_memory` for cross-session memory.
 2. Query `/search_work_trace` for evidence of what happened.
 3. Fetch raw entries or work traces when details matter.
-4. Let the human inspect and correct the record through the UI/overlay layer.
+4. Let the human inspect and correct the record through the UI annotation/correction layer.
 
-## For users
+## Privacy model
 
-Agent Diary is designed so each installation gathers **your own data locally**. The public repository contains only code, docs, tests, and synthetic fixtures.
+Open Agent Diary is designed so each installation gathers **your own data locally**. The public repository contains only code, docs, tests, and synthetic fixtures.
+
+By default the server command in this README binds to `127.0.0.1`, meaning only the current machine can reach it. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network.
 
 ## Development checks
 

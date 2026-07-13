@@ -986,7 +986,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_id": entry["entry_id"],
                 "artifact_type": "memory",
                 "producer": "agent-v1",
-                "content": "cusassistanter project deadline is friday",
+                "content": "customer project deadline is friday",
                 "created_at": "2026-05-21T10:01:00+00:00",
             },
         )
@@ -2374,7 +2374,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "chat_log",
                 "source": "openclaw",
                 "author_role": "agent",
-                "content": "TODO follow-up assistantorrow about budget approval.",
+                "content": "TODO follow-up tomorrow about budget approval.",
                 "created_at": "2026-05-25T10:00:00+00:00",
             },
         )
@@ -2691,7 +2691,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "chat_log",
                 "source": "openclaw",
                 "author_role": "agent",
-                "content": "TODO: follow up with cusassistanter on quote timeline.",
+                "content": "TODO: follow up with customer on quote timeline.",
                 "created_at": "2026-05-24T09:00:00+00:00",
             },
         )
@@ -2726,7 +2726,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_id": entry["entry_id"],
                 "overlay_type": "correction",
                 "author": "operator",
-                "content": "TODO: follow up with cusassistanter on contract signature timing.",
+                "content": "TODO: follow up with customer on contract signature timing.",
             },
         )
 
@@ -2785,7 +2785,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_id": e2["entry_id"],
                 "overlay_type": "annotation",
                 "author": "operator",
-                "content": "TODO: pending item remains for assistantorrow follow-up.",
+                "content": "TODO: pending item remains for tomorrow follow-up.",
             },
         )
 
@@ -2821,7 +2821,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "chat_log",
                 "source": "openclaw",
                 "author_role": "agent",
-                "content": "TODO follow-up assistantorrow about budget approval.",
+                "content": "TODO follow-up tomorrow about budget approval.",
                 "created_at": "2026-05-24T12:00:00+00:00",
             },
         )
@@ -2851,7 +2851,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "chat_log",
                 "source": "openclaw",
                 "author_role": "agent",
-                "content": "TODO follow-up assistantorrow about budget approval.",
+                "content": "TODO follow-up tomorrow about budget approval.",
                 "created_at": "2026-05-24T12:00:00+00:00",
             },
         )
@@ -2969,7 +2969,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "chat_log",
                 "source": "openclaw",
                 "author_role": "agent",
-                "content": "TODO follow-up with cusassistanter on budget approval.",
+                "content": "TODO follow-up with customer on budget approval.",
                 "created_at": "2026-05-24T12:00:00+00:00",
             },
         )
@@ -3058,7 +3058,7 @@ class AppendEntrySliceTests(unittest.TestCase):
                 "entry_type": "manual_note",
                 "source": "cli",
                 "author_role": "human",
-                "content": "TODO: unresolved usering question.",
+                "content": "TODO: unresolved user question.",
                 "created_at": "2026-05-24T13:00:00+00:00",
             },
         )

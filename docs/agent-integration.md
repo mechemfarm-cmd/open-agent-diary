@@ -19,7 +19,7 @@ Everything an agent needs happens over the API. The UI is optional.
 
 ```bash
 pip install -e /path/to/agent-diary
-agent-diary serve --host 0.0.0.0 --port 8041
+agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
 Or via Python directly:
@@ -29,7 +29,7 @@ cd /path/to/agent-diary
 PYTHONPATH=src python3 -m agent_diary.cli.main serve --host 0.0.0.0 --port 8041
 ```
 
-The server binds to `0.0.0.0` so it's reachable from any device on the same network (a trusted private network or LAN).
+By default, bind the server to `127.0.0.1` for local-only access. Bind to `0.0.0.0` or a private-network address only when the operator explicitly wants other trusted devices to connect.
 
 ---
 
@@ -242,4 +242,4 @@ The diary uses a single metadata convention for provenance tracking:
 }
 ```
 
-The `ingestion` block is auassistantatically added by `import-session-jsonl`. When posting entries directly via the API, provide at minimum `source_session_id` so work traces can be linked correctly.
+The `ingestion` block is automatically added by `import-session-jsonl`. When posting entries directly via the API, provide at minimum `source_session_id` so work traces can be linked correctly.

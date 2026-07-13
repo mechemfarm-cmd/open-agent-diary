@@ -61,7 +61,7 @@ Show:
 - full raw entry body from `raw_entry.content` (primary text block)
 - entry header metadata (`created_at`, `entry_type`, `source`, `author_role`)
 - attached artifacts as secondary supporting items (metadata-first list)
-- explicit derived refresh controls (operator-triggered, not auassistantatic):
+- explicit derived refresh controls (operator-triggered, not automatic):
   - refresh open loops
   - refresh conversation briefs
   - refresh compressed memory

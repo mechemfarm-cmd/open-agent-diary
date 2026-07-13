@@ -138,7 +138,7 @@ def _is_question_addressed_later(question_text: str, later_parts: list[str]) -> 
 def _loop_key(text: str) -> str:
     # Normalize obvious volatile tokens to reduce key churn within bounded windows.
     base = re.sub(r"\b\d+\b", " ", text.lower())
-    base = re.sub(r"\b(today|assistantorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", " ", base)
+    base = re.sub(r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", " ", base)
     base = re.sub(r"[^a-z0-9 ]+", " ", base)
     base = re.sub(r"\s+", " ", base).strip()
     return base[:80]

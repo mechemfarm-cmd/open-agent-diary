@@ -334,7 +334,7 @@ function speakerTone(label) {
   if (!normalized) {
     return SPEAKER_TONES[0];
   }
-  if (["user", "human", "you", "user", "sampleuser", "sampleuser"].includes(normalized)) {
+  if (["user", "human", "you", "sampleuser"].includes(normalized)) {
     return SPEAKER_TONES[0];
   }
   if (["assistant", "agent", "assistant", "codex", "bot"].includes(normalized)) {

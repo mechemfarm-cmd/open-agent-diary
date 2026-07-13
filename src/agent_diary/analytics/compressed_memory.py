@@ -56,7 +56,7 @@ def _speaker_label(speaker: str) -> str:
     lowered = _clean_text(speaker).lower()
     if lowered in {"assistant", "agent", "assistant", "codex", "bot"}:
         return "Assistant"
-    if lowered in {"user", "human", "user", "sampleuser", "sampleuser"}:
+    if lowered in {"user", "human", "sampleuser"}:
         return "User"
     return _clean_text(speaker) or "Speaker"
 
