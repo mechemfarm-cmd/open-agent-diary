@@ -1,0 +1,39 @@
+# Python cache / virtualenv
+__pycache__/
+*.pyc
+.venv/
+
+# Local runtime outputs (keep config only)
+data/entries/
+data/artifacts/
+data/overlays/
+data/index/memory.db
+data/imports/
+data/hermes-import-tracker/
+
+# Runtime work trace outputs
+data/work_trace/
+
+# Node.js (Tauri tooling)
+node_modules/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+
+# Python egg-info
+*.egg-info/
+
+# Hermes agent config/state
+.hermes/
+
+# Private/local release hazards
+backups/
+*.tgz
+*.tar.gz
+*.db
+*.sqlite
+*.sqlite3
+
+# Real conversation exports should not be committed as examples.
+examples/telegram*.jsonl
+examples/*real*.jsonl
