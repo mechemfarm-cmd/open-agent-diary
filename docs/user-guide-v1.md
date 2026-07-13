@@ -88,10 +88,10 @@ These are secondary interpretation layers.
 
 Examples:
 
-- conversation briefs
-- compressed memory
+- conversation summarys
+- search memory
 - open-loop analysis
-- overlays and stale warnings
+- annotations/corrections and stale warnings
 
 These are useful, but they are not the primary record. They help you scan, recall, and inspect. They should not replace the raw entry.
 
@@ -119,11 +119,11 @@ V1 is already useful for:
 - browsing entries in a timeline
 - searching memory
 - opening an entry and reading the raw record
-- inspecting conversation briefs and compressed memory
-- inspecting open loops
+- inspecting conversation summarys and search memory
+- inspecting possible follow-ups
 - viewing attached agent work for that entry
-- adding overlays and corrections
-- refreshing derived layers after overlays or imports
+- adding annotations/corrections and corrections
+- refreshing derived layers after annotations/corrections or imports
 
 V1 is not trying to be the final polished public version yet.
 
@@ -142,68 +142,47 @@ In particular, the work-trace layer is about meaningful operational provenance, 
 
 ## Main UI Layout
 
-The interface has three main areas.
+The interface is organized around a simple human loop:
 
-### Left column
+1. **Search or browse** for something you remember.
+2. **Read the source record** in the center panel.
+3. **Correct or inspect** supporting layers only when needed.
 
-This is the navigation and scope area.
+### Left column: find a record
 
-It includes:
+The left column contains:
 
-- search
-- timeline
-- recent imports
-- provenance scope controls
+- **Search your diary** — the recommended starting point.
+- **Recent entries** — a fallback when you want to browse chronologically.
+- **Advanced filters and imports** — collapsed by default so new users are not forced to understand import IDs or provenance scopes immediately.
 
-This column answers:
+### Center panel: source record
 
-- what corpus am I looking at
-- what batch did this come from
-- what entry do I want to open
-
-### Center panel
-
-This is the `Diary Entry` view.
+The center panel is the most important part of the app.
 
 It shows:
 
-- the raw entry body
-- the primary diary text
-- core metadata for the entry
+- the selected raw/source entry
+- core metadata
+- a search-origin banner when the entry was opened from a search result
+- a compact status line showing whether summaries, notes, follow-ups, or work traces exist
 
-This panel should be treated as the starting point for inspection.
+If a generated summary and the source record disagree, the source record wins.
 
-If the raw entry and a derived interpretation disagree, the raw entry wins as the primary truth layer.
+### Right panel: correct or inspect
 
-### Right panel
+The right panel is intentionally secondary. It keeps the main interface simple while preserving full transparency.
 
-This is the supporting interpretation and context area.
+| Tab | Purpose |
+|-----|---------|
+| **Correct** | Add annotations or corrections. This is the main edit path. The original entry remains visible. |
+| **Summary** | Plain-language summary, possible follow-ups, and recorded agent work. Helpful, but not authoritative. |
+| **Advanced** | Search-memory artifacts, provenance, support artifacts, and regeneration controls. Use this when auditing how the system got an answer. |
 
-It includes:
-
-- Open Loops
-- Conversation Brief
-- Compressed Memory
-- Agent Work
-- Overlays
-- Refresh controls
-- Secondary artifacts
-
-This panel is where you inspect what the system inferred, what work was performed, and what extra context has accumulated around the entry.
-
-The right panel is organized into **3 tabs**:
-
-| Tab | Contains |
-|-----|----------|
-| **Derived** | Open Loops, Conversation Brief, Compressed Memory, Agent Work |
-| **Annotations** | Overlays + Secondary Artifacts |
-| **Actions** | Refresh derived layer buttons |
-
-This replaces the previous 9-stacked-`<details>` layout with a categorized tabbed interface.
+This layout is a deliberate compromise: basic search + source record + correction are front and center, while provenance remains available for users who want to inspect deeper layers.
 
 ## Setup
 
-## Setup
 
 ### Local single-machine setup
 
@@ -257,7 +236,7 @@ The normal flow is:
 3. browse entries in context
 4. read the raw entry first
 5. inspect right-side supporting layers when needed
-6. add overlays if the record needs clarification
+6. add annotations/corrections if the record needs clarification
 7. refresh derived layers if they are stale or missing
 
 This keeps the product grounded in a truth-first workflow instead of treating derived layers as magic.
@@ -310,7 +289,7 @@ Use the side panel to answer:
 
 - what the agent inferred
 - what is currently unresolved
-- whether an overlay changed the interpretation
+- whether an annotation/correction changed the interpretation
 - what work the agent actually performed for this entry
 
 Think of this as “attached context,” not a replacement narrative.
@@ -341,15 +320,15 @@ The right-side derived layers are useful, but they are still secondary.
 
 Examples:
 
-- a conversation brief helps with scanning
-- compressed memory helps with fast recall
-- open loops help identify unresolved items
+- a conversation summary helps with scanning
+- search memory helps with fast recall
+- possible follow-ups help identify unresolved items
 
 These are support tools, not the same thing as the raw truth layer.
 
-## 7. Add overlays when the record needs clarification
+## 7. Add annotations/corrections when the record needs clarification
 
-Use overlays for:
+Use annotations/corrections for:
 
 - annotations
 - corrections
@@ -368,8 +347,8 @@ This is important because it preserves a clean audit trail:
 Use the refresh controls when:
 
 - new truthful entries were imported
-- an overlay changed the meaning of an entry
-- you want a fresh brief, memory layer, or open-loop analysis
+- an annotation/correction changed the meaning of an entry
+- you want a fresh summary, memory layer, or open-loop analysis
 
 Do not assume derived layers are always auassistantatically current.
 
@@ -385,7 +364,7 @@ For the current test week, the simplest operator loop is:
 4. read the raw entry first
 5. inspect `Agent Work` when the action between messages matters
 6. inspect derived layers when you want summaries or unresolved items
-7. add overlays if the record needs explanation or correction
+7. add annotations/corrections if the record needs explanation or correction
 8. refresh derived layers only when needed
 9. notice what feels awkward, unclear, missing, or especially useful
 
@@ -435,21 +414,21 @@ cd /path/to/agent-diary
 agent-diary search-work-trace --query "timeline layout" --limit 20
 ```
 
-## Refresh conversation briefs
+## Refresh conversation summarys
 
 ```bash
 cd /path/to/agent-diary
-agent-diary produce-conversation-briefs --import-id <IMPORT_ID> --truthful-only --limit 200
+agent-diary produce-conversation-summarys --import-id <IMPORT_ID> --truthful-only --limit 200
 ```
 
-## Refresh compressed memory
+## Refresh search memory
 
 ```bash
 cd /path/to/agent-diary
 agent-diary produce-compressed-memory --import-id <IMPORT_ID> --truthful-only --limit 200
 ```
 
-## Refresh open loops
+## Refresh possible follow-ups
 
 ```bash
 cd /path/to/agent-diary
@@ -491,7 +470,7 @@ The tool is much easier to use when scoped.
 
 Possible causes:
 
-- new overlays were added after the artifact was generated
+- new annotations/corrections were added after the artifact was generated
 - you are looking at older derived state
 - the entry scope is broader than intended
 
@@ -539,7 +518,7 @@ While using Agent Diary this week, notice:
 - whether `Agent Work` answers the right questions
 - whether the right panel is clear or cluttered
 - whether import scope is easy to understand
-- whether overlays and stale warnings behave sensibly
+- whether annotations/corrections and stale warnings behave sensibly
 - whether the product helps you trust the record more
 - whether any terminology still feels too technical
 - whether the setup/use instructions are missing something important

@@ -8,15 +8,16 @@ Open Agent Diary is backend-ready enough for staging, but it should not be annou
 - Data policy: public install starts empty and gathers the operator's own local data.
 - Examples: synthetic only.
 - License: MIT.
-- Remaining release blocker: UI polish and first-run clarity.
+- UI direction: simplified around search, source-record reading, and correction/annotation first. Advanced provenance remains available but is deliberately secondary.
+- Remaining release blocker: live user-facing UI review and polish.
 
 ## UI improvements before public release
 
-- First-run empty state that explains what the user is looking at and how to import sample data.
-- Clear left-to-right mental model: entries, details, derived memory, work traces.
+- First-run empty state that explains what the user is looking at and how to import sample data. Basic empty state is present; review in browser with a new user mindset.
+- Clear left-to-right mental model: search/browse, source record, correction/inspection tools.
 - Better visual hierarchy for raw truth vs derived artifacts.
 - Cleaner navigation between memory search, work-trace search, imports, and entry detail.
-- Obvious labels for "raw entry", "overlay", "brief", "compressed memory", and "open loops".
+- Obvious labels for "raw entry", "annotation/correction", "summary", "search memory", and "possible follow-ups".
 - Better responsive layout for laptop screens and narrow windows.
 - Safer copy for local network binding: default local-only, explain private-network use separately.
 - A visible privacy note: runtime data is local and not included in the public repo.

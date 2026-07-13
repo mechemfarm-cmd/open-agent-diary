@@ -392,7 +392,7 @@ function renderDialogueBody(raw, turns) {
 
   const note = document.createElement("div");
   note.className = "dialogue-note muted";
-  note.textContent = "Speaker-separated raw entry view. The stored raw content remains the source of truth.";
+  note.textContent = "Source record view. This stored entry is the evidence; summaries are only helpers.";
   transcript.appendChild(note);
 
   const renderedTurns = turns.length ? turns : [{ speaker: raw.speaker || "", body: raw.content || "" }];
@@ -429,7 +429,7 @@ function renderDialogueBody(raw, turns) {
 function renderLoops(loopArtifacts) {
   loopList.innerHTML = "";
   if (!loopArtifacts.length) {
-    loopList.innerHTML = '<li class="item muted">No open-loop analysis for this entry yet.</li>';
+    loopList.innerHTML = '<li class="item muted">No possible follow-ups have been generated for this entry yet.</li>';
     return;
   }
   for (const artifact of loopArtifacts) {
@@ -440,7 +440,7 @@ function renderLoops(loopArtifacts) {
     // Header
     const headDiv = document.createElement("div");
     const headStrong = document.createElement("strong");
-    headStrong.textContent = artifact.artifact_type || "analysis:open-loop";
+    headStrong.textContent = "Possible follow-ups";
     headDiv.appendChild(headStrong);
     li.appendChild(headDiv);
 
@@ -461,10 +461,10 @@ function renderLoops(loopArtifacts) {
 
     const badge = document.createElement("div");
     badge.className = "derived-badge";
-    badge.textContent = "Derived Interpretation";
+    badge.textContent = "Generated helper";
     li.appendChild(badge);
 
-    addMeta("Open loops: " + loops.length);
+    addMeta("Possible follow-ups: " + loops.length);
 
     const ul = document.createElement("ul");
     ul.className = "loop-list";
@@ -623,16 +623,16 @@ function renderArtifactStatusBar(briefArtifacts, loopArtifacts, overlays, memory
     (artifact) => artifact?.overlay_stale === true
   );
   const pills = [];
-  pills.push('<span class="status-pill">Brief: ' + (briefArtifacts.length ? "✓" : "none") + "</span>");
+  pills.push('<span class="status-pill">Summary: ' + (briefArtifacts.length ? "✓" : "none") + "</span>");
   if (loopArtifacts.length) {
     const count = loopArtifacts.reduce((sum, artifact) => {
       const loops = Array.isArray(artifact.open_loops) ? artifact.open_loops.length : 0;
       return sum + loops;
     }, 0);
-    pills.push('<span class="status-pill">Loops: ' + count + "</span>");
+    pills.push('<span class="status-pill">Follow-ups: ' + count + "</span>");
   }
   if (overlays.length) {
-    pills.push('<span class="status-pill">Overlays: ' + overlays.length + "</span>");
+    pills.push('<span class="status-pill">Notes: ' + overlays.length + "</span>");
   }
   if (workTraceEvents.length) {
     pills.push('<span class="status-pill">Work: ' + workTraceEvents.length + '</span>');
@@ -698,12 +698,12 @@ function renderRecallBanner(hit) {
     clearRecallBanner();
     return;
   }
-  const layer = hit.match_layer === "compressed_memory" ? "compressed memory" : "direct match";
+  const layer = hit.match_layer === "compressed_memory" ? "generated search memory" : "source record";
   recallBanner.hidden = false;
   recallBanner.innerHTML = "";
   const bannerDiv = document.createElement("div");
   const strong = document.createElement("strong");
-  strong.textContent = "Found via " + layer + ": ";
+  strong.textContent = "Found in " + layer + ": ";
   bannerDiv.appendChild(strong);
   bannerDiv.append('"' + (hit.match_text || "") + '"');
   recallBanner.appendChild(bannerDiv);
@@ -732,7 +732,7 @@ function describeRefreshScope(payload) {
   if (payload.source_session_id) parts.push("session=" + payload.source_session_id);
   if (payload.import_id) parts.push("import=" + payload.import_id);
   if (payload.truthful_only) parts.push("truthful-only");
-  return parts.length ? "Scope: " + parts.join(", ") : "Scope: none";
+  return parts.length ? "Scope: " + parts.join(", ") : "Scope: none selected";
 }
 
 async function clearScopeState() {
@@ -783,7 +783,7 @@ function renderDetail(detail) {
     detailBody.textContent = content;
   }
   detailBody.scrollTop = 0;
-  detailStatus.textContent = `Viewing ${raw.entry_id}`;
+  detailStatus.textContent = `Viewing source record ${raw.entry_id}`;
   detailBody.setAttribute("aria-label", `Diary entry ${raw.entry_id}`);
 
   if (briefArtifacts.length) {
@@ -804,14 +804,14 @@ function renderDetail(detail) {
     }
     briefDetails.open = true;
   } else {
-    briefBody.textContent = "No conversation brief is attached to this entry yet.";
+    briefBody.textContent = "No plain-language summary is attached to this entry yet.";
     briefDetails.open = false;
   }
 
   memoryArtifactList.innerHTML = "";
   if (!memoryArtifacts.length) {
     memoryArtifactList.innerHTML =
-      '<li class="item muted">No compressed-memory artifact is attached to this entry yet.</li>';
+      '<li class="item muted">No search-memory artifact is attached to this entry yet.</li>';
   }
   for (const artifact of memoryArtifacts) {
     const li = document.createElement("li");
@@ -857,7 +857,7 @@ function renderDetail(detail) {
 
   overlayList.innerHTML = "";
   if (!overlays.length) {
-    overlayList.innerHTML = '<li class="item muted">No overlays attached.</li>';
+    overlayList.innerHTML = '<li class="item muted">No corrections or annotations yet.</li>';
   }
   for (const overlay of overlays) {
     const li = document.createElement("li");
@@ -884,7 +884,7 @@ function renderDetail(detail) {
 
   artifactList.innerHTML = "";
   if (!secondaryArtifacts.length) {
-    artifactList.innerHTML = '<li class="item muted">No artifacts attached.</li>';
+    artifactList.innerHTML = '<li class="item muted">No extra support artifacts attached.</li>';
   }
   for (const artifact of secondaryArtifacts) {
     const li = document.createElement("li");
@@ -945,14 +945,14 @@ function renderSearchResults(matches) {
   searchResults.setAttribute("aria-busy", "false");
   searchResults.innerHTML = "";
   if (!matches.length) {
-    searchResults.innerHTML = '<li class="item muted">No memory hits for this query.</li>';
+    searchResults.innerHTML = '<li class="item muted">No results for this search.</li>';
     return;
   }
   for (const hit of matches) {
     const isMemory = hit.match_layer === "compressed_memory";
     const layerBadgeHtml = isMemory
-      ? '<span class="layer-badge layer-badge-memory">via memory</span>'
-      : '<span class="layer-badge layer-badge-raw">direct</span>';
+      ? '<span class="layer-badge layer-badge-memory">memory</span>'
+      : '<span class="layer-badge layer-badge-raw">source</span>';
     const li = document.createElement("li");
     li.className = "item";
     li.innerHTML = `
@@ -1075,7 +1075,7 @@ async function loadTimeline() {
     if (state.importId) scopeParts.push(`import=${state.importId}`);
     if (state.truthfulOnly) scopeParts.push("truthful-only");
     const scopeLabel = scopeParts.length ? ` · scope ${scopeParts.join(", ")}` : "";
-    timelineStatus.textContent = `Showing ${result.items.length} of ${result.total ?? "?"} entries · offset ${state.offset}${scopeLabel}`;
+    timelineStatus.textContent = `Showing ${result.items.length} of ${result.total ?? "?"} entries${scopeLabel}`;
   } catch (err) {
     showError(timelineList, `Timeline error: ${err.message}`);
     timelineStatus.textContent = "Could not load entries.";
@@ -1132,7 +1132,7 @@ async function submitOverlay() {
   const author = overlayAuthorInput.value.trim();
   const content = overlayContentInput.value.trim();
   if (!overlayType || !author || !content) {
-    overlayStatus.textContent = "Type, author, and content are required.";
+    overlayStatus.textContent = "Type, author, and note are required.";
     return;
   }
   overlayStatus.textContent = "Saving overlay...";
@@ -1144,10 +1144,10 @@ async function submitOverlay() {
       content,
     });
     overlayContentInput.value = "";
-    overlayStatus.textContent = "Overlay added.";
+    overlayStatus.textContent = "Note saved.";
     await loadEntry(state.selectedEntryId);
   } catch (err) {
-    overlayStatus.textContent = `Overlay save failed: ${err.message}`;
+    overlayStatus.textContent = `Note save failed: ${err.message}`;
   }
 }
 
@@ -1175,22 +1175,22 @@ function setRefreshDerivedButtonsDisabled(disabled) {
 
 function summarizeProducerResult(endpoint, result) {
   if (endpoint === "/produce_open_loops") {
-    return `Open loops refreshed. loops=${result.loop_count || 0} source_entries=${(result.source_entry_ids || []).length}`;
+    return `Follow-ups refreshed. loops=${result.loop_count || 0} source_entries=${(result.source_entry_ids || []).length}`;
   }
   if (endpoint === "/produce_conversation_briefs") {
-    return `Conversation briefs refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
+    return `Summaries refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
   }
   if (endpoint === "/produce_compressed_memory") {
-    return `Compressed memory refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
+    return `Search memory refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
   }
-  return "Derived layer refreshed.";
+  return "Generated helper refreshed.";
 }
 
 async function refreshDerived(endpoint) {
   const payload = producerPayloadFromCurrentContext();
   refreshDerivedScope.textContent = describeRefreshScope(payload);
   if (!payload.entry_ids && !payload.source_conversation_id && !payload.source_session_id && !payload.import_id && !payload.truthful_only) {
-    refreshDerivedStatus.textContent = "Select an entry or apply a scope first.";
+    refreshDerivedStatus.textContent = "Select an entry or apply an advanced filter first.";
     return;
   }
   const label =
@@ -1198,7 +1198,7 @@ async function refreshDerived(endpoint) {
       ? "open loops"
       : endpoint === "/produce_conversation_briefs"
         ? "conversation briefs"
-        : "compressed memory";
+        : "search memory";
   refreshDerivedStatus.textContent = `Refreshing ${label}...`;
   setRefreshDerivedButtonsDisabled(true);
   try {
@@ -1219,7 +1219,7 @@ async function refreshDerived(endpoint) {
 }
 
 async function runSearch(query) {
-  searchStatus.textContent = "Searching memory layers...";
+  searchStatus.textContent = "Searching diary...";
   searchResults.setAttribute("aria-busy", "true");
   try {
     const filters = {};
@@ -1234,9 +1234,9 @@ async function runSearch(query) {
     renderSearchResults(result.matches || []);
     const summary = result.match_summary || {};
     if (summary.using_fallback) {
-      searchStatus.textContent = `Found ${(result.matches || []).length} raw-entry fallback hits. Compressed-memory hits: 0.`;
+      searchStatus.textContent = `Found ${(result.matches || []).length} source source-record hits.`;
     } else {
-      searchStatus.textContent = `Found ${(result.matches || []).length} compressed-memory hits.`;
+      searchStatus.textContent = `Found ${(result.matches || []).length} generated memory hits.`;
     }
   } catch (err) {
     showError(searchResults, `Search error: ${err.message}`);
@@ -1445,13 +1445,13 @@ async function init() {
   if (state.searchQuery) {
     await runSearch(state.searchQuery);
   } else {
-    searchStatus.textContent = "Search prefers compressed memory and falls back to raw entries when needed.";
+    searchStatus.textContent = "Search looks across generated memory first, then falls back to raw source entries.";
   }
   if (state.selectedEntryId) {
     await loadEntry(state.selectedEntryId);
   } else {
     detailMeta.innerHTML = "";
-    detailStatus.textContent = "Select an entry from timeline or search.";
+    detailStatus.textContent = "Search or choose a recent entry.";
     interpHeader.textContent = "";
     artifactStatusBar.innerHTML = "";
     loopList.innerHTML = "";
@@ -1466,7 +1466,7 @@ async function init() {
     refreshDerivedStatus.textContent = "";
     clearRecallBanner();
     clearDetailBody();
-    detailBody.textContent = "Select an entry to view raw detail.";
+    detailBody.textContent = "Search or choose a recent entry to read the source record.";
   }
   writeUrlState();
 }
@@ -1510,15 +1510,15 @@ window.addEventListener("popstate", async () => {
     await runSearch(state.searchQuery);
   } else {
     searchResults.innerHTML = "";
-    searchStatus.textContent = "Search prefers compressed memory and falls back to raw entries when needed.";
+    searchStatus.textContent = "Search looks across generated memory first, then falls back to raw source entries.";
   }
   if (state.selectedEntryId) {
     await loadEntry(state.selectedEntryId);
   } else {
     detailMeta.innerHTML = "";
     clearDetailBody();
-    detailBody.textContent = "Select an entry to view raw detail.";
-    detailStatus.textContent = "Select an entry from timeline or search.";
+    detailBody.textContent = "Search or choose a recent entry to read the source record.";
+    detailStatus.textContent = "Search or choose a recent entry.";
     interpHeader.textContent = "";
     artifactStatusBar.innerHTML = "";
     loopList.innerHTML = "";
