@@ -768,6 +768,37 @@ def _query_terms(query: str) -> list[str]:
     return [t for t in re.findall(r"\w+", query.lower()) if t]
 
 
+def _parse_date_only_query(query: str) -> str | None:
+    """Return YYYY-MM-DD for a date-only human query, or None.
+
+    Text search treats punctuation as token separators, so a query like
+    ``7/19/26`` becomes loose tokens (7, 19, 26) and matches unrelated logs.
+    Date-looking queries should instead mean "entries from that date".
+    """
+    text = query.strip()
+    if not text:
+        return None
+
+    iso_match = re.fullmatch(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})", text)
+    if iso_match:
+        year, month, day = (int(part) for part in iso_match.groups())
+    else:
+        slash_match = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})", text)
+        if not slash_match:
+            return None
+        month, day, raw_year = slash_match.groups()
+        month = int(month)
+        day = int(day)
+        year = int(raw_year)
+        if year < 100:
+            year += 2000
+
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
+    except ValueError:
+        return None
+
+
 def _score_match_text(text: str, query: str) -> dict[str, int]:
     lowered = text.lower()
     terms = _query_terms(query)
@@ -1106,6 +1137,39 @@ def _search_raw_entries(paths: Paths, query: str, limit: int) -> list[dict[str, 
     )
 
 
+def _search_entries_by_date(
+    paths: Paths,
+    *,
+    iso_date: str,
+    limit: int,
+    rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    candidate_rows = rows if rows is not None else list_entry_rows(paths.sqlite_path, limit=1000000, offset=0)
+    matches: list[dict[str, Any]] = []
+    for row in candidate_rows:
+        created_at = str(row.get("created_at", ""))
+        if not created_at.startswith(iso_date):
+            continue
+        body = _effective_entry_body_from_row(paths, row)
+        content = str(body.get("content", ""))
+        matches.append(
+            {
+                "entry_id": row["entry_id"],
+                "artifact_id": None,
+                "indexed_at": created_at,
+                "match_text": _build_preview(content, size=240),
+                "match_layer": "date_filter",
+                "supporting_layers": ["raw_entry"],
+                "entry_type": body.get("entry_type", "unknown"),
+                "source": row["source"],
+                "author_role": row["author_role"],
+                "fetch_raw_entry": {"entry_id": row["entry_id"]},
+            }
+        )
+    matches.sort(key=lambda item: str(item.get("indexed_at", "")), reverse=True)
+    return matches[:limit]
+
+
 def _search_raw_entries_in_rows(
     paths: Paths,
     *,
@@ -1400,6 +1464,35 @@ def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
     limit = int(payload.get("limit", 20))
     filters = _resolve_provenance_filters(payload)
     scoped_rows = _rows_matching_provenance_scope(paths, filters) if any(filters.values()) else []
+
+    date_filter = _parse_date_only_query(query)
+    if date_filter:
+        date_matches = _search_entries_by_date(
+            paths,
+            iso_date=date_filter,
+            limit=limit,
+            rows=scoped_rows if scoped_rows else None,
+        )
+        return {
+            "query": query,
+            "limit": limit,
+            "filters": {
+                "source_conversation_id": filters.get("source_conversation_id"),
+                "source_session_id": filters.get("source_session_id"),
+                "import_id": filters.get("import_id"),
+                "truthful_only": bool(filters.get("truthful_only", False)),
+                "created_date": date_filter,
+            },
+            "matches": date_matches,
+            "match_summary": {
+                "compressed_memory_hits": 0,
+                "raw_entry_hits": len(date_matches),
+                "entry_matches": len(date_matches),
+                "using_raw_layer": bool(date_matches),
+                "date_filter": date_filter,
+            },
+            "note": "Date-only search detected; returning entries whose created_at date matches the requested day.",
+        }
 
     compressed_matches = search_index(paths.sqlite_path, query=query, limit=max(limit * 10, 200))
     linked_matches: list[dict[str, Any]] = []

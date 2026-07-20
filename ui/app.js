@@ -1367,10 +1367,15 @@ async function runSearch(query) {
     writeUrlState();
     renderSearchResults(result.matches || []);
     const summary = result.match_summary || {};
-    if (summary.using_fallback) {
-      searchStatus.textContent = `Found ${(result.matches || []).length} source source-record hits.`;
+    const count = (result.matches || []).length;
+    if (summary.date_filter) {
+      searchStatus.textContent = `Found ${count} source record${count === 1 ? "" : "s"} from ${summary.date_filter}.`;
+    } else if (summary.using_raw_layer && summary.compressed_memory_hits > 0) {
+      searchStatus.textContent = `Found ${count} source/memory-backed hit${count === 1 ? "" : "s"}.`;
+    } else if (summary.using_raw_layer) {
+      searchStatus.textContent = `Found ${count} source record hit${count === 1 ? "" : "s"}.`;
     } else {
-      searchStatus.textContent = `Found ${(result.matches || []).length} generated memory hits.`;
+      searchStatus.textContent = `Found ${count} generated memory hit${count === 1 ? "" : "s"}.`;
     }
   } catch (err) {
     showError(searchResults, `Search error: ${err.message}`);
