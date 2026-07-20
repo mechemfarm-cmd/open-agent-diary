@@ -10,6 +10,10 @@ The app is built around a simple loop:
 
 Under the hood it keeps raw entries, work traces, and generated search/summary artifacts separate. The core rule is simple: **generated memory is never the hidden source of truth.** Users can inspect the source records and the generated layers that agents rely on.
 
+## Supported v0.1 release path
+
+The supported v0.1 shape is the Python local server plus the browser UI served from that same process. The Tauri desktop shell in `src-tauri/` is experimental/development-only right now: it does not bundle or start the Python backend, so do not treat generated desktop bundles as standalone release artifacts yet.
+
 ## Quick start
 
 ```bash
@@ -81,7 +85,7 @@ The intended recall flow is:
 
 Open Agent Diary is designed so each installation gathers **your own data locally**. The public repository contains only code, docs, tests, and synthetic fixtures.
 
-By default the server command in this README binds to `127.0.0.1`, meaning only the current machine can reach it. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network.
+By default the server command in this README binds to `127.0.0.1`, meaning only the current machine can reach it. The diary can contain private conversation memory, local file paths, and work traces. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network with firewall/Tailscale restrictions and understand that the current v0.1 API has unauthenticated write routes.
 
 ## Development checks
 

@@ -274,53 +274,104 @@ function formatMetaDateTime(iso) {
   return `${date.toLocaleString()} · ${iso}`;
 }
 
-function buildOverlayStalenessHtml(artifact) {
-  if (!artifact || artifact.overlay_stale !== true) {
-    return "";
+function appendMutedLabelValue(parent, label, value) {
+  const row = document.createElement("div");
+  row.className = "muted";
+  const strong = document.createElement("strong");
+  strong.textContent = label + ":";
+  row.appendChild(strong);
+  row.append(" " + String(value ?? ""));
+  parent.appendChild(row);
+  return row;
+}
+
+function attachSupportLinkHandler(button) {
+  button.addEventListener("click", async () => {
+    const id = button.getAttribute("data-support-entry-id");
+    if (!id) return;
+    await loadEntry(id);
+  });
+}
+
+function createSourceEntryLinks(sourceEntryIds) {
+  const wrap = document.createElement("span");
+  wrap.className = "support-links";
+  const ids = Array.isArray(sourceEntryIds) ? sourceEntryIds.filter((id) => String(id || "").trim()) : [];
+  if (!ids.length) {
+    const none = document.createElement("span");
+    none.className = "muted";
+    none.textContent = "none";
+    wrap.appendChild(none);
+    return wrap;
   }
+  for (const id of ids) {
+    const normalizedId = String(id);
+    const button = document.createElement("button");
+    button.className = "support-link";
+    button.type = "button";
+    button.setAttribute("data-support-entry-id", normalizedId);
+    button.textContent = normalizedId;
+    attachSupportLinkHandler(button);
+    wrap.appendChild(button);
+    wrap.append(" ");
+  }
+  return wrap;
+}
+
+function createOverlayStalenessBlock(artifact) {
+  if (!artifact || artifact.overlay_stale !== true) {
+    return null;
+  }
+  const fragment = document.createDocumentFragment();
+  const badge = document.createElement("div");
+  badge.className = "stale-badge";
+  badge.setAttribute("role", "note");
+  badge.setAttribute("aria-label", "Artifact may be stale after overlay");
+  badge.textContent = "May be stale after overlay";
+  fragment.appendChild(badge);
+
   const generatedAt = artifact.artifact_generated_at
     ? formatMetaDateTime(artifact.artifact_generated_at)
     : "unknown";
   const overlayAt = artifact.latest_overlay_at ? formatMetaDateTime(artifact.latest_overlay_at) : "unknown";
-  return `
-    <div class="stale-badge" role="note" aria-label="Artifact may be stale after overlay">
-      May be stale after overlay
-    </div>
-    <div class="muted stale-meta">artifact generated: ${esc(generatedAt)}</div>
-    <div class="muted stale-meta">latest overlay: ${esc(overlayAt)}</div>
-  `;
+  const generated = document.createElement("div");
+  generated.className = "muted stale-meta";
+  generated.textContent = "artifact generated: " + generatedAt;
+  fragment.appendChild(generated);
+  const overlay = document.createElement("div");
+  overlay.className = "muted stale-meta";
+  overlay.textContent = "latest overlay: " + overlayAt;
+  fragment.appendChild(overlay);
+  return fragment;
 }
 
-function buildSourceEntryLinksHtml(sourceEntryIds) {
-  const ids = Array.isArray(sourceEntryIds) ? sourceEntryIds.filter((id) => String(id || "").trim()) : [];
-  if (!ids.length) {
-    return '<span class="muted">none</span>';
-  }
-  return ids
-    .map((id) => `<button class="support-link" type="button" data-support-entry-id="${esc(id)}">${esc(id)}</button>`)
-    .join(" ");
-}
-
-function buildProvenanceHtml(artifact) {
+function createProvenanceBlock(artifact) {
   const p = artifact?.provenance || {};
-  const rows = [];
-  if (p.schema_version) rows.push(`<div class="muted"><strong>schema:</strong> ${esc(p.schema_version)}</div>`);
-  if (p.method) rows.push(`<div class="muted"><strong>method:</strong> ${esc(p.method)}</div>`);
-  if (p.method_version) rows.push(`<div class="muted"><strong>method version:</strong> ${esc(p.method_version)}</div>`);
-  if (p.generated_at) rows.push(`<div class="muted"><strong>generated:</strong> ${esc(formatMetaDateTime(p.generated_at))}</div>`);
+  const block = document.createElement("div");
+  block.className = "provenance-block";
+
+  const badge = document.createElement("div");
+  badge.className = "derived-badge";
+  badge.textContent = "Provenance";
+  block.appendChild(badge);
+
+  if (p.schema_version) appendMutedLabelValue(block, "schema", p.schema_version);
+  if (p.method) appendMutedLabelValue(block, "method", p.method);
+  if (p.method_version) appendMutedLabelValue(block, "method version", p.method_version);
+  if (p.generated_at) appendMutedLabelValue(block, "generated", formatMetaDateTime(p.generated_at));
   if (p.analysis_window && (p.analysis_window.start || p.analysis_window.end)) {
-    rows.push(
-      `<div class="muted"><strong>window:</strong> ${esc(p.analysis_window.start || "?")} → ${esc(p.analysis_window.end || "?")}</div>`
-    );
+    appendMutedLabelValue(block, "window", `${p.analysis_window.start || "?"} → ${p.analysis_window.end || "?"}`);
   }
-  const sourceIdsHtml = buildSourceEntryLinksHtml(p.source_entry_ids);
-  rows.push(`<div class="muted"><strong>source entries:</strong> <span class="support-links">${sourceIdsHtml}</span></div>`);
-  return `
-    <div class="provenance-block">
-      <div class="derived-badge">Provenance</div>
-      ${rows.join("")}
-    </div>
-  `;
+
+  const sourceRow = document.createElement("div");
+  sourceRow.className = "muted";
+  const label = document.createElement("strong");
+  label.textContent = "source entries:";
+  sourceRow.appendChild(label);
+  sourceRow.append(" ");
+  sourceRow.appendChild(createSourceEntryLinks(p.source_entry_ids));
+  block.appendChild(sourceRow);
+  return block;
 }
 
 function normalizeSpeakerLabel(label) {
@@ -455,9 +506,9 @@ function renderLoops(loopArtifacts) {
     addMeta("producer: " + (artifact.producer || ""));
     addMeta("status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : ""));
 
-    // Build provenance/overlay sections (these use safe esc() internally)
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    li.appendChild(createProvenanceBlock(artifact));
+    const staleBlock = createOverlayStalenessBlock(artifact);
+    if (staleBlock) li.appendChild(staleBlock);
 
     const badge = document.createElement("div");
     badge.className = "derived-badge";
@@ -619,28 +670,35 @@ function renderWorkTrace(workTraceEvents) {
 }
 
 function renderArtifactStatusBar(briefArtifacts, loopArtifacts, overlays, memoryArtifacts, workTraceEvents) {
+  artifactStatusBar.innerHTML = "";
   const hasStale = [...briefArtifacts, ...loopArtifacts, ...memoryArtifacts].some(
     (artifact) => artifact?.overlay_stale === true
   );
-  const pills = [];
-  pills.push('<span class="status-pill">Summary: ' + (briefArtifacts.length ? "✓" : "none") + "</span>");
+
+  function appendPill(text, extraClass = "") {
+    const pill = document.createElement("span");
+    pill.className = extraClass ? `status-pill ${extraClass}` : "status-pill";
+    pill.textContent = text;
+    artifactStatusBar.appendChild(pill);
+  }
+
+  appendPill("Summary: " + (briefArtifacts.length ? "✓" : "none"));
   if (loopArtifacts.length) {
     const count = loopArtifacts.reduce((sum, artifact) => {
       const loops = Array.isArray(artifact.open_loops) ? artifact.open_loops.length : 0;
       return sum + loops;
     }, 0);
-    pills.push('<span class="status-pill">Follow-ups: ' + count + "</span>");
+    appendPill("Follow-ups: " + count);
   }
   if (overlays.length) {
-    pills.push('<span class="status-pill">Notes: ' + overlays.length + "</span>");
+    appendPill("Notes: " + overlays.length);
   }
   if (workTraceEvents.length) {
-    pills.push('<span class="status-pill">Work: ' + workTraceEvents.length + '</span>');
+    appendPill("Work: " + workTraceEvents.length);
   }
   if (hasStale) {
-    pills.push('<span class="status-pill status-pill-stale">STALE</span>');
+    appendPill("STALE", "status-pill-stale");
   }
-  artifactStatusBar.innerHTML = pills.join("");
 }
 
 function renderInterpHeader(briefArtifacts, loopArtifacts, memoryArtifacts, workTraceEvents) {
@@ -794,14 +852,9 @@ function renderDetail(detail) {
     content.className = "artifact-body";
     content.textContent = currentBrief.content || "";
     briefBody.appendChild(content);
-    const provenance = document.createElement("div");
-    provenance.innerHTML = buildProvenanceHtml(currentBrief);
-    briefBody.appendChild(provenance);
-    if (currentBrief.overlay_stale === true) {
-      const stale = document.createElement("div");
-      stale.innerHTML = buildOverlayStalenessHtml(currentBrief);
-      briefBody.appendChild(stale);
-    }
+    briefBody.appendChild(createProvenanceBlock(currentBrief));
+    const staleBlock = createOverlayStalenessBlock(currentBrief);
+    if (staleBlock) briefBody.appendChild(staleBlock);
     briefDetails.open = true;
   } else {
     briefBody.textContent = "No plain-language summary is attached to this entry yet.";
@@ -833,21 +886,15 @@ function renderDetail(detail) {
     prod.textContent = "producer: " + (artifact.producer || "");
     li.appendChild(prod);
 
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    li.appendChild(createProvenanceBlock(artifact));
+    const staleBlock = createOverlayStalenessBlock(artifact);
+    if (staleBlock) li.appendChild(staleBlock);
 
     const pre = document.createElement("pre");
     pre.className = "artifact-body";
     pre.textContent = artifact.content || "";
     li.appendChild(pre);
 
-    for (const btn of li.querySelectorAll("button[data-support-entry-id]")) {
-      btn.addEventListener("click", async () => {
-        const id = btn.getAttribute("data-support-entry-id");
-        if (!id) return;
-        await loadEntry(id);
-      });
-    }
     memoryArtifactList.appendChild(li);
   }
   memoryDetails.hidden = memoryArtifacts.length === 0;
@@ -910,23 +957,10 @@ function renderDetail(detail) {
     statusDiv.className = "muted";
     statusDiv.textContent = "status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : "");
     li.appendChild(statusDiv);
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
-    for (const btn of li.querySelectorAll("button[data-support-entry-id]")) {
-      btn.addEventListener("click", async () => {
-        const id = btn.getAttribute("data-support-entry-id");
-        if (!id) return;
-        await loadEntry(id);
-      });
-    }
+    li.appendChild(createProvenanceBlock(artifact));
+    const staleBlock = createOverlayStalenessBlock(artifact);
+    if (staleBlock) li.appendChild(staleBlock);
     artifactList.appendChild(li);
-  }
-  for (const btn of briefBody.querySelectorAll("button[data-support-entry-id]")) {
-    btn.addEventListener("click", async () => {
-      const id = btn.getAttribute("data-support-entry-id");
-      if (!id) return;
-      await loadEntry(id);
-    });
   }
   renderArtifactStatusBar(briefArtifacts, loopArtifacts, overlays, memoryArtifacts, workTraceEvents);
   renderInterpHeader(briefArtifacts, loopArtifacts, memoryArtifacts, workTraceEvents);
@@ -950,19 +984,36 @@ function renderSearchResults(matches) {
   }
   for (const hit of matches) {
     const isMemory = hit.match_layer === "compressed_memory";
-    const layerBadgeHtml = isMemory
-      ? '<span class="layer-badge layer-badge-memory">memory</span>'
-      : '<span class="layer-badge layer-badge-raw">source</span>';
     const li = document.createElement("li");
     li.className = "item";
-    li.innerHTML = `
-      <button data-entry-id="${hit.entry_id}" aria-current="${state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false"}" class="${state.selectedSearchHitEntryId === hit.entry_id ? "active" : ""}">
-        <div>${layerBadgeHtml}</div>
-        <div class="muted">${formatMetaDateTime(hit.indexed_at)}${hit.artifact_id ? ` · artifact ${hit.artifact_id}` : ""}</div>
-        <div class="preview">${hit.match_text}</div>
-      </button>
-    `;
-    li.querySelector("button").addEventListener("click", async () => {
+
+    const button = document.createElement("button");
+    const entryId = String(hit.entry_id || "");
+    button.setAttribute("data-entry-id", entryId);
+    button.setAttribute("aria-current", state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false");
+    if (state.selectedSearchHitEntryId === hit.entry_id) button.className = "active";
+
+    const badgeWrap = document.createElement("div");
+    const layerBadge = document.createElement("span");
+    layerBadge.className = isMemory ? "layer-badge layer-badge-memory" : "layer-badge layer-badge-raw";
+    layerBadge.textContent = isMemory ? "memory" : "source";
+    badgeWrap.appendChild(layerBadge);
+    button.appendChild(badgeWrap);
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = formatMetaDateTime(hit.indexed_at);
+    if (hit.artifact_id) {
+      meta.append(" · artifact " + String(hit.artifact_id));
+    }
+    button.appendChild(meta);
+
+    const preview = document.createElement("div");
+    preview.className = "preview";
+    preview.textContent = hit.match_text || "";
+    button.appendChild(preview);
+
+    button.addEventListener("click", async () => {
       state.selectedSearchHitEntryId = hit.entry_id;
       state.openedFromSearchHit = {
         entry_id: hit.entry_id,
@@ -972,6 +1023,7 @@ function renderSearchResults(matches) {
       persistState();
       await loadEntry(hit.entry_id);
     });
+    li.appendChild(button);
     searchResults.appendChild(li);
   }
   wireListKeyboardNav(searchResults);
@@ -988,16 +1040,32 @@ function renderImports(items) {
     const li = document.createElement("li");
     li.className = "item";
     const active = state.importId && state.importId === item.import_id;
-    const scopedConversation = item.source_conversation_id ? ` · ${item.source_conversation_id}` : "";
-    const scopedSession = item.source_session_id ? ` · ${item.source_session_id}` : "";
-    li.innerHTML = `
-      <button type="button" data-import-id="${item.import_id}" class="${active ? "active" : ""}" aria-current="${active ? "true" : "false"}">
-        <div><strong>${item.import_id}</strong></div>
-        <div class="muted">${formatMetaDateTime(item.imported_at || "")}${scopedConversation}${scopedSession}</div>
-        <div class="muted">imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}</div>
-      </button>
-    `;
-    const btn = li.querySelector("button");
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("data-import-id", String(item.import_id || ""));
+    btn.setAttribute("aria-current", active ? "true" : "false");
+    if (active) btn.className = "active";
+
+    const title = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = item.import_id || "unknown import";
+    title.appendChild(strong);
+    btn.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    const metaParts = [formatMetaDateTime(item.imported_at || "")];
+    if (item.source_conversation_id) metaParts.push(String(item.source_conversation_id));
+    if (item.source_session_id) metaParts.push(String(item.source_session_id));
+    meta.textContent = metaParts.join(" · ");
+    btn.appendChild(meta);
+
+    const counts = document.createElement("div");
+    counts.className = "muted";
+    counts.textContent = `imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}`;
+    btn.appendChild(counts);
+
     btn.addEventListener("click", async () => {
       state.importId = String(item.import_id || "").trim();
       if (item.source_conversation_id) {
@@ -1012,11 +1080,11 @@ function renderImports(items) {
       writeUrlState();
       renderScopeBar();
       await loadTimeline();
-      renderImports(items);
       if (state.searchQuery) {
         await runSearch(state.searchQuery);
       }
     });
+    li.appendChild(btn);
     importsList.appendChild(li);
   }
 }

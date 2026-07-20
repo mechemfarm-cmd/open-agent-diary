@@ -692,6 +692,48 @@ class AppendEntrySliceTests(unittest.TestCase):
         self.assertFalse(body["ok"])
         self.assertEqual(body["error"]["code"], "payload_too_large")
 
+
+    def test_http_cors_does_not_allow_cross_origin_by_default(self) -> None:
+        server = self._request_test_server()
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        self.addCleanup(conn.close)
+
+        conn.request(
+            "OPTIONS",
+            "/search_memory",
+            headers={"Origin": "http://evil.example", "Host": f"127.0.0.1:{server.server_port}"},
+        )
+        response = conn.getresponse()
+        response.read()
+
+        self.assertEqual(response.status, 204)
+        self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+
+    def test_http_cors_allows_same_origin_only(self) -> None:
+        server = self._request_test_server()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        self.addCleanup(conn.close)
+
+        conn.request(
+            "OPTIONS",
+            "/search_memory",
+            headers={"Origin": origin, "Host": f"127.0.0.1:{server.server_port}"},
+        )
+        response = conn.getresponse()
+        response.read()
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.getheader("Access-Control-Allow-Origin"), origin)
+
+    def test_ui_avoids_interpolated_html_for_api_controlled_lists(self) -> None:
+        ui_js = (Path(__file__).resolve().parents[1] / "ui" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("li.innerHTML = `", ui_js)
+        self.assertNotIn("insertAdjacentHTML", ui_js)
+        self.assertIn("preview.textContent = hit.match_text", ui_js)
+        self.assertIn("strong.textContent = item.import_id", ui_js)
+
     def test_bootstrap_sqlite_sets_wal_busy_timeout_and_core_indexes(self) -> None:
         with sqlite3.connect(self.paths.sqlite_path) as conn:
             journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]

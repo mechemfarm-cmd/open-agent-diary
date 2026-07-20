@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import mimetypes
 from http import HTTPStatus
+from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -38,13 +39,38 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
 
     ui_root: Path | None = None
 
+    def _same_origin_cors_origin(self) -> str | None:
+        """Return the request Origin only when it matches this server origin.
+
+        The browser UI is served by this same process, so normal local use does
+        not need permissive CORS. Avoid wildcard CORS because a LAN-exposed
+        diary has unauthenticated write routes and contains private memory.
+        """
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host")
+        if not origin or not host:
+            return None
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        if parsed.netloc != host:
+            return None
+        return origin
+
+    def _send_cors_headers(self) -> None:
+        origin = self._same_origin_cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(code)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -57,6 +83,7 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         mime_type, _ = mimetypes.guess_type(str(file_path))
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
@@ -77,9 +104,7 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
@@ -105,6 +130,12 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
             self._send_json(
                 HTTPStatus.BAD_REQUEST,
                 {"ok": False, "error": {"code": "invalid_content_length", "message": "Content-Length must be an integer"}},
+            )
+            return
+        if body_len < 0:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": {"code": "invalid_content_length", "message": "Content-Length must be non-negative"}},
             )
             return
         if body_len > self.max_body_bytes:
@@ -137,10 +168,10 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         try:
             result = route(self.server.paths, payload)
             self._send_json(HTTPStatus.OK, {"ok": True, "result": result})
-        except FileNotFoundError as exc:
-            self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": str(exc)})
-        except Exception as exc:  # scaffold-friendly fallback
-            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+        except FileNotFoundError:
+            self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": {"code": "not_found", "message": "requested record was not found"}})
+        except Exception:  # keep internal paths/details out of HTTP responses
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": {"code": "request_failed", "message": "request could not be processed"}})
 
 
 class AgentDiaryHTTPServer(ThreadingHTTPServer):

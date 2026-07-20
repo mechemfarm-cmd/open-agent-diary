@@ -198,7 +198,7 @@ pip install -e .
 Start the server (API + UI on one port):
 
 ```bash
-agent-diary serve --host 0.0.0.0 --port 8041
+agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
 Then open:
@@ -211,21 +211,22 @@ The UI auto-detects the API server from `window.location.origin` — no URL conf
 
 ### Headless host plus remote workstation setup
 
-The API server serves both the backend and UI files on a single port.
-On a trusted private-network host, bind to `0.0.0.0`:
+The safe default is to keep the service on loopback and reach it over SSH forwarding:
 
 ```bash
+agent-diary serve --host 127.0.0.1 --port 8041
+ssh -L 8041:127.0.0.1:8041 user@your-headless-host
+```
+
+Then open `http://127.0.0.1:8041` on your workstation.
+
+Advanced LAN/Tailscale exposure is possible, but treat it as an explicit risk decision. The diary may contain private memories, local paths, and work traces, and the v0.1 API has unauthenticated write routes. Only bind to a private interface or `0.0.0.0` on a trusted network with firewall/Tailscale restrictions:
+
+```bash
+agent-diary serve --host <trusted-private-ip> --port 8041
+# or, only if you understand the exposure:
 agent-diary serve --host 0.0.0.0 --port 8041
 ```
-
-Access from another trusted device on the same private network:
-
-```text
-http://<private-host-ip>:8041/
-http://192.168.178.40:8041/
-```
-
-No SSH tunnel is needed when both devices are on the same trusted private network.
 
 ## What Happens During Normal Use
 
@@ -252,10 +253,11 @@ The normal operating pattern is:
 3. browse entries
 4. generate or refresh derived layers only after the truth layer is in place
 
-For recurring imports from external chat/session systems, adapt the integration commands documented in:
+For recurring imports from external chat/session systems, start with the supported integration contracts in:
 
-- `docs/guinea-pig-testing-quickstart.md`
-- `docs/truthful-recurring-ingestion.md`
+- `docs/agent-integration.md`
+- `docs/canonical-conversation-transcript.md`
+- `docs/work-trace-layer-v1.md`
 
 ## 2. Inspect recent imports
 
@@ -376,7 +378,7 @@ That is the whole point of the week: use it like a real tool and gather honest f
 
 ```bash
 cd /path/to/agent-diary
-agent-diary serve --host 0.0.0.0 --port 8041
+agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
 ## List imports
@@ -451,7 +453,7 @@ bash ~/.hermes/scripts/hermes-to-diary.sh
 Check:
 
 - the server is running: `ps aux | grep agent-diary`
-- the server binds to `0.0.0.0:8041`
+- for local use, the server binds to `127.0.0.1:8041`
 - your current scope is not accidentally too narrow
 - try `http://<private-host-ip>:8041/` from another device
 

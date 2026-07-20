@@ -32,3 +32,8 @@ Open Agent Diary is backend-ready enough for staging, but it should not be annou
 - Generate derived artifacts and verify they are visually secondary.
 - Run `agent-diary doctor --json` and expose/describe the result somewhere sensible.
 - Test at common widths: 1440px, 1280px, 1024px, and mobile/narrow.
+
+
+## Tauri desktop shell status
+
+The supported v0.1 release path is local Python server + browser UI. The Tauri shell is experimental/development-only until it can start, configure, and supervise the Python backend as a sidecar. Do not publish desktop bundles as standalone release artifacts before that lifecycle is implemented and smoke-tested.
