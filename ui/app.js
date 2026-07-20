@@ -154,11 +154,11 @@ async function checkConnection() {
   }
 }
 
-function renderTimeline(items) {
+function renderTimeline(items, total) {
   timelineList.setAttribute("aria-busy", "false");
   timelineList.innerHTML = "";
   if (!items.length) {
-    timelineList.innerHTML = '<li class="item muted">No entries in this page.</li>';
+    timelineList.appendChild(createTimelineEmptyState(total));
     return;
   }
 
@@ -186,6 +186,54 @@ function renderTimeline(items) {
     timelineList.prepend(headerLi);
   }
   wireListKeyboardNav(timelineList);
+}
+
+function createTimelineEmptyState(total) {
+  const li = document.createElement("li");
+  li.className = "item empty-diary";
+  const hasScope = Boolean(state.sourceConversationId || state.sourceSessionId || state.importId || state.truthfulOnly);
+  const hasEntriesOutsideThisPage = Number(total) > 0 || state.offset > 0;
+
+  const heading = document.createElement("h3");
+  heading.textContent = hasScope
+    ? "No entries match this view."
+    : hasEntriesOutsideThisPage
+      ? "There are no more entries on this page."
+      : "Start with the synthetic demo.";
+  li.appendChild(heading);
+
+  const intro = document.createElement("p");
+  if (hasScope) {
+    intro.textContent = "Try clearing the active filters, or import data into this installation before browsing it.";
+    li.appendChild(intro);
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "empty-action";
+    clear.textContent = "Clear filters";
+    clear.addEventListener("click", async () => { await clearScopeState(); });
+    li.appendChild(clear);
+    return li;
+  }
+
+  if (hasEntriesOutsideThisPage) {
+    intro.textContent = "Go back to the previous page, or search for a specific record.";
+    li.appendChild(intro);
+    return li;
+  }
+
+  intro.textContent = "This installation is empty. The repository includes invented examples only; import them locally to explore the full source-record workflow.";
+  li.appendChild(intro);
+
+  const commands = document.createElement("pre");
+  commands.className = "demo-commands";
+  commands.textContent = [
+    "agent-diary import-session-jsonl --path examples/synthetic-session-import.jsonl --import-id demo",
+    "agent-diary produce-conversation-briefs --import-id demo --force",
+    "agent-diary produce-compressed-memory --import-id demo --force",
+    "agent-diary produce-open-loops --import-id demo",
+  ].join("\n");
+  li.appendChild(commands);
+  return li;
 }
 
 function buildTimelineItem(item) {
@@ -979,7 +1027,7 @@ function renderSearchResults(matches) {
   searchResults.setAttribute("aria-busy", "false");
   searchResults.innerHTML = "";
   if (!matches.length) {
-    searchResults.innerHTML = '<li class="item muted">No results for this search.</li>';
+    searchResults.appendChild(createSearchEmptyState());
     return;
   }
   for (const hit of matches) {
@@ -1027,6 +1075,24 @@ function renderSearchResults(matches) {
     searchResults.appendChild(li);
   }
   wireListKeyboardNav(searchResults);
+}
+
+function createSearchEmptyState() {
+  const li = document.createElement("li");
+  li.className = "item muted";
+  const hasScope = Boolean(state.sourceConversationId || state.sourceSessionId || state.importId || state.truthfulOnly);
+  li.textContent = hasScope
+    ? "No results in the active scope. Clear filters to search the full diary."
+    : "No results yet. Try another phrase, browse recent entries, or import the synthetic demo shown there.";
+  if (hasScope) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "empty-action";
+    clear.textContent = "Clear filters";
+    clear.addEventListener("click", async () => { await clearScopeState(); });
+    li.appendChild(clear);
+  }
+  return li;
 }
 
 function renderImports(items) {
@@ -1137,7 +1203,7 @@ async function loadTimeline() {
       offset: state.offset,
       filters,
     });
-    renderTimeline(result.items || []);
+    renderTimeline(result.items || [], result.total);
     const scopeParts = [];
     if (state.sourceConversationId) scopeParts.push(`conversation=${state.sourceConversationId}`);
     if (state.importId) scopeParts.push(`import=${state.importId}`);

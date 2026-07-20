@@ -16,7 +16,11 @@ Prominent first action. Searches generated memory first and falls back to source
 
 ### Recent entries
 
-A simple browse list for people who do not know what to search for. Advanced filters and recent imports are collapsed by default.
+A simple browse list for people who do not know what to search for. On a new, empty installation it shows exact commands for importing the repository's synthetic demo data. Advanced filters and recent imports are collapsed by default.
+
+### First-use orientation
+
+The page begins with a compact three-step explanation: find a record, read the raw source record, then correct or inspect supporting layers. It also makes the local/private data model visible without promoting network exposure.
 
 ### Source record
 
@@ -49,7 +53,7 @@ http://127.0.0.1:8041
 
 ## Manual UI check
 
-1. Load with an empty `data/` directory and confirm the page tells a new user to search or import data.
+1. Load with an empty `data/` directory and confirm the timeline presents the synthetic-demo commands and local/private data note.
 2. Import `examples/synthetic-session-import.jsonl`.
 3. Search for `privacy review`.
 4. Open a result and confirm the center panel clearly presents the source record.
