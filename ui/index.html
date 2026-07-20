@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Open Agent Diary</title>
-    <link rel="stylesheet" href="./styles.css?v=20260713a" />
+    <link rel="stylesheet" href="./styles.css?v=20260720a" />
   </head>
   <body>
     <a class="skip-link" href="#detailBody">Skip to selected entry</a>
@@ -26,13 +26,26 @@
       </details>
     </header>
 
+    <section class="onboarding-strip" aria-labelledby="howItWorksHeading">
+      <div>
+        <p class="step-label">How this works</p>
+        <h2 id="howItWorksHeading">Find it, read the source, then add context.</h2>
+      </div>
+      <ol class="onboarding-steps">
+        <li><strong>1. Search or browse</strong><span>Find a conversation, decision, or piece of work.</span></li>
+        <li><strong>2. Read the source record</strong><span>The stored raw entry is the primary evidence.</span></li>
+        <li><strong>3. Correct or inspect</strong><span>Notes and generated helpers never replace the source.</span></li>
+      </ol>
+      <p class="privacy-note">Local and private: data stays in this installation. This public repository ships synthetic examples only.</p>
+    </section>
+
     <main class="layout" role="main">
       <aside class="nav-column" aria-label="Find entries">
         <section class="panel panel-search" aria-labelledby="searchHeading">
           <div class="panel-heading">
             <p class="step-label">Step 1</p>
             <h2 id="searchHeading">Search your diary</h2>
-            <p class="help-text">Ask for a project, decision, promise, bug, command, or phrase. Results link back to the raw entry.</p>
+            <p class="help-text">Start here. Ask for a project, decision, promise, bug, command, or phrase; every result leads back to its source record.</p>
           </div>
           <form id="searchForm" class="search-form" role="search" aria-label="Search memory">
             <label for="searchInput" class="sr-only">Search memory</label>
@@ -101,8 +114,8 @@
         <div class="panel-heading detail-heading">
           <div>
             <p class="step-label">Step 2</p>
-            <h2 id="detailHeading">Read the source record</h2>
-            <p class="help-text">This is the primary evidence. Summaries and search indexes are secondary.</p>
+            <h2 id="detailHeading">Source record</h2>
+            <p class="help-text"><strong>Primary truth layer.</strong> Read this first; summaries, memory, and follow-ups are helpers.</p>
           </div>
         </div>
         <p id="detailStatus" class="status-line" role="status" aria-live="polite"></p>
@@ -110,9 +123,9 @@
         <div id="detailMeta" class="meta" aria-label="Entry metadata"></div>
         <article id="detailBody" class="raw-body" tabindex="-1">
           <div class="empty-state">
-            <h3>Start with search.</h3>
-            <p>Search for something you remember, then open a result to see the exact stored entry.</p>
-            <p>If the entry is wrong or needs context, use <strong>Correct / annotate</strong> on the right.</p>
+            <h3>Choose a source record.</h3>
+            <p>Search for something you remember, or browse recent entries. The full stored entry appears here.</p>
+            <p>If it needs context or is misleading, use <strong>Correct / annotate</strong>. Your note does not overwrite the original.</p>
           </div>
         </article>
         <div id="artifactStatusBar" class="artifact-status-bar" aria-label="Entry support status" aria-live="polite"></div>
@@ -122,19 +135,19 @@
         <div class="panel-heading">
           <p class="step-label">Step 3</p>
           <h2>Correct or inspect</h2>
-          <p class="help-text">Keep the main view simple. Open the deeper layers only when you need provenance.</p>
+          <p class="help-text">Add human context, then inspect generated helpers only when they are useful.</p>
         </div>
         <div id="interpHeader" class="interp-header"></div>
         <div class="tab-bar" role="tablist" aria-label="Entry support sections">
-          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="annotations" id="tab-annotations-btn">Correct</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="derived" id="tab-derived-btn">Summary</button>
+          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="annotations" id="tab-annotations-btn">Correct / annotate</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="derived" id="tab-derived-btn">Generated helpers</button>
           <button class="tab-btn" role="tab" aria-selected="false" data-tab="actions" id="tab-actions-btn">Advanced</button>
         </div>
 
         <div id="tab-annotations" class="tab-panel active" role="tabpanel" aria-labelledby="tab-annotations-btn">
           <section class="plain-card">
             <h3>Make the record clearer</h3>
-            <p>Add an annotation for extra context, or a correction when the record is misleading. The original entry remains visible.</p>
+            <p>Add an annotation for context or a correction when the record is misleading. These notes sit beside the source; they never overwrite it.</p>
           </section>
           <details id="overlayDetails" aria-label="Corrections and annotations" open>
             <summary>Corrections and annotations</summary>
@@ -157,11 +170,11 @@
 
         <div id="tab-derived" class="tab-panel" role="tabpanel" aria-labelledby="tab-derived-btn">
           <section class="plain-card">
-            <h3>Helpful summaries</h3>
-            <p>These are generated from the source record. They help search and skimming, but they are not the authority.</p>
+            <h3>Generated helpers</h3>
+            <p>These are generated from source records. They help search and skimming, but they are not the authority.</p>
           </section>
           <details id="briefDetails" aria-label="Conversation summary layer" open>
-            <summary>Plain-language summary</summary>
+            <summary>Generated summary</summary>
             <div id="briefBody" class="brief-detail">No summary is attached to this entry yet.</div>
           </details>
           <details id="loopDetails" aria-label="Possible follow-up items">
@@ -180,7 +193,7 @@
             <p>This area exposes generated memory artifacts, provenance, support files, and regeneration tools.</p>
           </section>
           <details id="memoryDetails" aria-label="Compressed memory layer" hidden>
-            <summary>Search memory artifact</summary>
+            <summary>Generated search memory</summary>
             <ul id="memoryArtifactList" class="list secondary layer-list" role="list" aria-label="Compressed memory artifacts"></ul>
           </details>
           <details id="artifactDetails" aria-label="Secondary artifact metadata">
@@ -201,6 +214,6 @@
       </aside>
     </main>
 
-    <script type="module" src="./app.js?v=20260713a"></script>
+    <script type="module" src="./app.js?v=20260720a"></script>
   </body>
 </html>

@@ -109,6 +109,28 @@ body {
   border-radius: 16px;
   min-width: min(100%, 460px);
 }
+.onboarding-strip {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.75fr) minmax(420px, 1.5fr) minmax(220px, 0.75fr);
+  gap: 18px;
+  align-items: center;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+}
+.onboarding-strip h2 { margin: 0; font-size: 1rem; letter-spacing: -0.01em; }
+.onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.onboarding-steps li { display: grid; gap: 2px; font-size: 0.82rem; line-height: 1.35; }
+.onboarding-steps strong { color: var(--accent-dark); }
+.onboarding-steps span, .privacy-note { color: var(--muted); }
+.privacy-note { margin: 0; font-size: 0.8rem; line-height: 1.4; }
 .api-config {
   display: grid;
   grid-template-columns: auto minmax(180px, 1fr) auto auto;
@@ -394,6 +416,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--muted);
 }
 .empty-state h3 { margin: 0 0 8px; color: var(--ink); }
+.empty-diary { padding: 16px; background: var(--accent-soft); border-color: #b8d8d4; }
+.empty-diary h3 { margin: 0 0 7px; color: var(--accent-dark); }
+.empty-diary p { margin: 6px 0; color: var(--muted); line-height: 1.45; }
+.demo-commands { margin: 10px 0 0; padding: 10px; overflow-x: auto; border-radius: 10px; background: white; border: 1px solid #b8d8d4; color: var(--ink); font: 0.77rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+.empty-action { margin-top: 9px; }
 .dialogue-view {
   display: block;
   font-family: var(--ui-font);
@@ -506,6 +533,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .compact-actions { display: flex; gap: 7px; }
 
 @media (max-width: 1180px) {
+  .onboarding-strip { grid-template-columns: 1fr; gap: 10px; }
   .layout { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); }
   .panel-interpretation { grid-column: 2; max-height: 44vh; }
 }
@@ -514,6 +542,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   .topbar { position: static; align-items: flex-start; flex-direction: column; }
   .connection-panel { width: 100%; border-radius: 16px; }
   .api-config { grid-template-columns: 1fr; }
+  .onboarding-strip { padding: 14px 16px; }
+  .onboarding-steps { grid-template-columns: 1fr; gap: 7px; }
   .layout { grid-template-columns: 1fr; padding: 10px; }
   .panel-interpretation { grid-column: auto; max-height: none; }
   .panel-search { max-height: none; }
