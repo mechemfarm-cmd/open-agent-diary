@@ -1189,9 +1189,30 @@ function wireListKeyboardNav(listEl) {
   }
 }
 
+function updateTimelinePagination(result) {
+  const items = result.items || [];
+  const totalNumber = Number(result.total);
+  const hasTotal = Number.isFinite(totalNumber);
+  const start = items.length ? state.offset + 1 : 0;
+  const end = state.offset + items.length;
+  const page = Math.floor(state.offset / state.limit) + 1;
+  const pageCount = hasTotal ? Math.max(1, Math.ceil(totalNumber / state.limit)) : null;
+
+  prevPageBtn.disabled = state.offset <= 0;
+  nextPageBtn.disabled = hasTotal ? end >= totalNumber : items.length < state.limit;
+  prevPageBtn.title = prevPageBtn.disabled ? "Already at the newest entries" : `Show entries ${Math.max(1, state.offset - state.limit + 1)}–${state.offset}`;
+  nextPageBtn.title = nextPageBtn.disabled ? "Already at the oldest entries" : `Show entries ${end + 1}–${end + state.limit}`;
+
+  const totalLabel = hasTotal ? ` of ${totalNumber}` : "";
+  const pageLabel = pageCount ? `page ${page}/${pageCount}` : `page ${page}`;
+  return `Showing entries ${start}–${end}${totalLabel} (${pageLabel})`;
+}
+
 async function loadTimeline() {
   timelineStatus.textContent = "Loading entries...";
   timelineList.setAttribute("aria-busy", "true");
+  prevPageBtn.disabled = true;
+  nextPageBtn.disabled = true;
   try {
     const filters = {};
     if (state.sourceConversationId) filters.source_conversation_id = state.sourceConversationId;
@@ -1209,10 +1230,12 @@ async function loadTimeline() {
     if (state.importId) scopeParts.push(`import=${state.importId}`);
     if (state.truthfulOnly) scopeParts.push("truthful-only");
     const scopeLabel = scopeParts.length ? ` · scope ${scopeParts.join(", ")}` : "";
-    timelineStatus.textContent = `Showing ${result.items.length} of ${result.total ?? "?"} entries${scopeLabel}`;
+    timelineStatus.textContent = `${updateTimelinePagination(result)}${scopeLabel}`;
   } catch (err) {
     showError(timelineList, `Timeline error: ${err.message}`);
     timelineStatus.textContent = "Could not load entries.";
+    prevPageBtn.disabled = state.offset <= 0;
+    nextPageBtn.disabled = false;
   }
 }
 
