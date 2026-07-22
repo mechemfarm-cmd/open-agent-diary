@@ -15,6 +15,7 @@ class Paths:
     imports_dir: Path
     index_dir: Path
     config_dir: Path
+    archive_dir: Path
     sqlite_path: Path
 
 
@@ -31,5 +32,6 @@ def default_paths(root: Path | None = None) -> Paths:
         imports_dir=data_root / "imports",
         index_dir=data_root / "index",
         config_dir=data_root / "config",
+        archive_dir=data_root / "archives",
         sqlite_path=data_root / "index" / "memory.db",
     )

@@ -49,6 +49,7 @@ from agent_diary.service.handlers import (
     status,
 )
 from agent_diary.service.http_server import AgentDiaryHandler, AgentDiaryHTTPServer
+from agent_diary.storage.archiver import ArchiveConfig, archive_month, archive_report, archive_stale_entries
 from agent_diary.storage.files import ensure_data_dirs
 
 
@@ -84,6 +85,82 @@ class AppendEntrySliceTests(unittest.TestCase):
         body = json.loads(raw_file.read_text(encoding="utf-8"))
         self.assertEqual(body["entry_id"], result["entry_id"])
         self.assertEqual(body["content"], "hello diary")
+
+
+    def test_archive_month_keeps_raw_entry_fetchable_after_file_removed(self) -> None:
+        created_at = "2026-01-15T12:00:00+00:00"
+        result = append_entry(
+            self.paths,
+            {
+                "entry_type": "chat_log",
+                "source": "test",
+                "author_role": "mixed",
+                "content": "archive me without losing a byte",
+                "created_at": created_at,
+            },
+        )
+        raw_file = Path(result["raw_file"])
+        self.assertTrue(raw_file.exists())
+
+        archive_result = archive_month(self.paths, 2026, 1)
+
+        self.assertTrue(archive_result["ok"])
+        self.assertFalse(raw_file.exists())
+        fetched = fetch_raw_entry(self.paths, {"entry_id": result["entry_id"]})
+        self.assertEqual(fetched["entry"]["content"], "archive me without losing a byte")
+        self.assertEqual(fetched["entry"]["created_at"], created_at)
+        self.assertTrue(fetched["entry_file"].startswith("archive:"))
+
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            raw_file_path = conn.execute(
+                "SELECT raw_file_path FROM entries WHERE entry_id = ?",
+                (result["entry_id"],),
+            ).fetchone()[0]
+        self.assertTrue(raw_file_path.startswith("archive://"))
+        self.assertIn("#entries/2026/01/15/", raw_file_path)
+
+    def test_archive_stale_entries_respects_dry_run(self) -> None:
+        result = append_entry(
+            self.paths,
+            {
+                "entry_type": "chat_log",
+                "source": "test",
+                "author_role": "mixed",
+                "content": "dry run entry",
+                "created_at": "2026-02-01T00:00:00+00:00",
+            },
+        )
+        raw_file = Path(result["raw_file"])
+        old = datetime(2025, 1, 1).timestamp()
+        os.utime(raw_file, (old, old))
+
+        results = archive_stale_entries(
+            self.paths,
+            ArchiveConfig(after_days=1, max_bytes=1, max_files=9999, dry_run=True),
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["dry_run"])
+        self.assertTrue(raw_file.exists())
+
+    def test_archive_report_lists_archives_and_candidates(self) -> None:
+        append_entry(
+            self.paths,
+            {
+                "entry_type": "chat_log",
+                "source": "test",
+                "author_role": "mixed",
+                "content": "report entry",
+                "created_at": "2026-03-01T00:00:00+00:00",
+            },
+        )
+        report_before = archive_report(self.paths)
+        self.assertTrue(report_before["ok"])
+        self.assertTrue(any(m["year"] == 2026 and m["month"] == 3 for m in report_before["candidate_months"]))
+
+        archive_month(self.paths, 2026, 3)
+        report_after = archive_report(self.paths)
+        self.assertTrue(report_after["existing_archives"])
 
     def test_append_entry_registers_index_row(self) -> None:
         created_at = "2026-05-20T11:00:00+00:00"

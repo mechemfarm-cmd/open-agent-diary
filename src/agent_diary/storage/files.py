@@ -18,6 +18,7 @@ def ensure_data_dirs(paths: Paths) -> None:
         paths.imports_dir,
         paths.index_dir,
         paths.config_dir,
+        paths.archive_dir,
     ):
         p.mkdir(parents=True, exist_ok=True)
     ensure_import_dirs(paths)

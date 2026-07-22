@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_diary.config import Paths
 from agent_diary.index.repository import connect_sqlite
+from agent_diary.storage.archiver import archive_report, read_archive_entry
 
 
 _REQUIRED_TABLES = {
@@ -66,6 +67,7 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
         paths.imports_dir,
         paths.index_dir,
         paths.config_dir,
+        paths.archive_dir,
     ]
     missing_dirs = [str(path) for path in expected_dirs if not path.is_dir()]
     checks.append({"name": "data_directories", "ok": not missing_dirs, "missing": missing_dirs})
@@ -114,8 +116,23 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
     work_ids = {str(row["event_id"]) for row in work_rows}
     missing_entry_files: list[str] = []
     mismatched_entry_files: list[str] = []
+    archived_entry_count = 0
     for row in entry_rows:
-        path = Path(str(row["raw_file_path"]))
+        raw_file_path = str(row["raw_file_path"])
+        if raw_file_path.startswith("archive://"):
+            archived_entry_count += 1
+            internal_path = raw_file_path.split("#", 1)[1] if "#" in raw_file_path else None
+            body = read_archive_entry(paths, str(row["entry_id"]), internal_path=internal_path)
+            if body is None:
+                missing_entry_files.append(raw_file_path)
+                _limited_append(issues, {"severity": "error", "code": "missing_archived_entry", "entry_id": row["entry_id"], "path": raw_file_path}, max_issues)
+                continue
+            if body.get("entry_id") != row["entry_id"]:
+                mismatched_entry_files.append(raw_file_path)
+                _limited_append(issues, {"severity": "error", "code": "entry_file_id_mismatch", "entry_id": row["entry_id"], "path": raw_file_path}, max_issues)
+            continue
+
+        path = Path(raw_file_path)
         if not path.exists():
             missing_entry_files.append(str(path))
             _limited_append(issues, {"severity": "error", "code": "missing_entry_file", "entry_id": row["entry_id"], "path": str(path)}, max_issues)
@@ -159,7 +176,7 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
 
     checks.extend(
         [
-            {"name": "entry_index_files", "ok": not missing_entry_files and not mismatched_entry_files, "missing_count": len(missing_entry_files), "mismatch_count": len(mismatched_entry_files)},
+            {"name": "entry_index_files", "ok": not missing_entry_files and not mismatched_entry_files, "missing_count": len(missing_entry_files), "mismatch_count": len(mismatched_entry_files), "archived_count": archived_entry_count},
             {"name": "work_trace_index_files", "ok": not missing_work_files and not mismatched_work_files, "missing_count": len(missing_work_files), "mismatch_count": len(mismatched_work_files)},
             {"name": "orphan_entry_files", "ok": not orphan_entry_files, "warning_count": len(orphan_entry_files)},
             {"name": "orphan_work_trace_files", "ok": not orphan_work_files, "warning_count": len(orphan_work_files)},
@@ -174,6 +191,14 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
     if len(work_rows) != work_fts_count:
         _limited_append(issues, {"severity": "error", "code": "work_trace_fts_count_mismatch", "work_trace_count": len(work_rows), "fts_count": work_fts_count}, max_issues)
 
+    archive_state = archive_report(paths)
+    checks.append({
+        "name": "archives",
+        "ok": archive_state.get("ok", False),
+        "archive_count": len(archive_state.get("existing_archives", [])),
+        "candidate_month_count": len(archive_state.get("candidate_months", [])),
+    })
+
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     return {
@@ -184,6 +209,9 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
             "artifact_count": len(artifact_rows),
             "memory_index_count": memory_count,
             "issue_count": len(issues),
+            "archived_entry_count": archived_entry_count,
+            "archive_count": len(archive_state.get("existing_archives", [])),
+            "archive_candidate_month_count": len(archive_state.get("candidate_months", [])),
             "error_count": error_count,
             "warning_count": warning_count,
             "issues_truncated": len(issues) >= max_issues,

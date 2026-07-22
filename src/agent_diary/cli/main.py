@@ -20,7 +20,7 @@ from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.service.doctor import run_doctor
-from agent_diary.service.doctor import run_doctor
+from agent_diary.storage.archiver import ArchiveConfig, archive_stale_entries, archive_report
 from agent_diary.service.handlers import (
     append_entry,
     append_overlay,
@@ -370,6 +370,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="run read-only backend consistency checks")
     p_doctor.add_argument("--max-issues", type=int, default=100)
+
+    p_archive = sub.add_parser(
+        "archive",
+        help="pack old entry months into compressed archives",
+        description="Find calendar-month directories that exceed configured thresholds and pack them into single tar.gz archives. Archived entries remain transparently accessible through the API and reader.",
+    )
+    p_archive.add_argument("--dry-run", action="store_true", help="report what would be archived without making changes")
+    p_archive.add_argument("--report", action="store_true", help="show existing archives and candidate months")
+    p_archive.add_argument("--after-days", type=int, default=60, help="minimum age of the newest file in a month before archiving (default: 60)")
+    p_archive.add_argument("--max-bytes", type=int, default=10 * 1024 * 1024, help="max total bytes in a month before archiving (default: 10MB)")
+    p_archive.add_argument("--max-files", type=int, default=500, help="max file count in a month before archiving (default: 500)")
 
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -863,6 +874,20 @@ def main() -> None:
 
     if args.command == "list-imports":
         out = list_imports(paths, {"limit": args.limit})
+        _print(out, args.json)
+        return
+
+    if args.command == "archive":
+        if args.report:
+            out = archive_report(paths)
+        else:
+            cfg = ArchiveConfig(
+                after_days=args.after_days,
+                max_bytes=args.max_bytes,
+                max_files=args.max_files,
+                dry_run=args.dry_run,
+            )
+            out = {"ok": True, "results": archive_stale_entries(paths, cfg)}
         _print(out, args.json)
         return
 
