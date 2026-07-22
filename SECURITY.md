@@ -26,4 +26,4 @@ Please include:
 
 ## Desktop shell status
 
-The Tauri shell is experimental/development-only until it starts, configures, and supervises the Python backend as a sidecar. Do not treat generated desktop bundles as standalone secure release artifacts yet.
+The supported v0.1 UI is the browser UI served by the local Python backend. The Tauri shell is experimental/development-only until it starts, configures, and supervises the Python backend as a sidecar. Do not treat generated desktop bundles as standalone secure release artifacts yet.

@@ -1,5 +1,10 @@
 # Open Agent Diary UI
 
+## Release status
+
+The browser UI in this directory is included in the supported v0.1 release path. It is served by the Python backend and is the current human-facing UI. The separate Tauri desktop shell is experimental until it manages the backend lifecycle itself.
+
+
 The UI is intentionally organized around a simple human loop:
 
 1. **Search or browse** for a memory.

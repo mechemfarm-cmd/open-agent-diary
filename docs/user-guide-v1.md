@@ -88,7 +88,7 @@ These are secondary interpretation layers.
 
 Examples:
 
-- conversation summarys
+- conversation summaries
 - search memory
 - open-loop analysis
 - annotations/corrections and stale warnings
@@ -119,7 +119,7 @@ V1 is already useful for:
 - browsing entries in a timeline
 - searching memory
 - opening an entry and reading the raw record
-- inspecting conversation summarys and search memory
+- inspecting conversation summaries and search memory
 - inspecting possible follow-ups
 - viewing attached agent work for that entry
 - adding annotations/corrections and corrections
@@ -416,7 +416,7 @@ cd /path/to/agent-diary
 agent-diary search-work-trace --query "timeline layout" --limit 20
 ```
 
-## Refresh conversation summarys
+## Refresh conversation summaries
 
 ```bash
 cd /path/to/agent-diary
@@ -445,6 +445,11 @@ To trigger it manually:
 ```bash
 bash ~/.hermes/scripts/hermes-to-diary.sh
 ```
+
+
+## Archived raw entries
+
+As a diary grows, old monthly raw-entry files can be packed into compressed archives under `data/archives/`. This is lossless storage compression, not summarization: the original JSON source records remain recoverable byte-for-byte through the normal fetch/detail path. Search continues to use the SQLite index, and opening an archived entry transparently reads it from the archive.
 
 ## Troubleshooting
 

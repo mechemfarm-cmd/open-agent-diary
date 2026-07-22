@@ -12,7 +12,7 @@ Under the hood it keeps raw entries, work traces, and generated search/summary a
 
 ## Supported v0.1 release path
 
-The supported v0.1 shape is the Python local server plus the browser UI served from that same process. The Tauri desktop shell in `src-tauri/` is experimental/development-only right now: it does not bundle or start the Python backend, so do not treat generated desktop bundles as standalone release artifacts yet.
+The supported v0.1 shape is the Python local server plus the browser UI served from that same process. In other words: the UI is included and supported for v0.1 use. The Tauri desktop shell in `src-tauri/` is experimental/development-only right now: it does not bundle or start the Python backend, so do not treat generated desktop bundles as standalone release artifacts yet.
 
 ## Quick start
 
@@ -53,6 +53,7 @@ agent-diary doctor --json
 - Work-trace layer for operational evidence
 - Generated artifacts for summaries, search memory, and possible follow-ups
 - Read-only `doctor` command for consistency checks
+- Transparent monthly archives for old raw entries (`data/archives/*.tar.gz`)
 - Synthetic examples only — no real chat history ships with the project
 
 ## Project layout

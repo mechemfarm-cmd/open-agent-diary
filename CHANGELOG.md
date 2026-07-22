@@ -2,9 +2,9 @@
 
 All notable changes to Open Agent Diary will be documented here.
 
-## 0.1.0 - unreleased
+## 0.1.0 - public repo candidate
 
-Initial public-release candidate.
+Initial public repository candidate. No formal tagged GitHub Release has been cut yet.
 
 ### Added
 
@@ -13,6 +13,9 @@ Initial public-release candidate.
 - Synthetic demo import flow.
 - Generated conversation briefs, compressed search memory, open-loop analysis, and work-trace records as inspectable secondary layers.
 - `doctor` consistency checks.
+- Browser UI for search, browse, raw source-record reading, annotation/correction, summaries, and advanced provenance inspection.
+- Date-like search handling and clearer browse pagination state.
+- Transparent monthly archived-entry storage for old raw JSON files.
 - CI checks for backend tests and compile validation.
 
 ### Security / privacy
