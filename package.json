@@ -8,16 +8,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/example-org/agent-diary.git"
+    "url": "git+https://github.com/mechemfarm-cmd/open-agent-diary.git"
   },
   "keywords": [],
-  "author": "SampleUser Mechem",
+  "author": "Willard Mechem",
   "license": "MIT",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/example-org/agent-diary/issues"
+    "url": "https://github.com/mechemfarm-cmd/open-agent-diary/issues"
   },
-  "homepage": "https://github.com/example-org/agent-diary#readme",
+  "homepage": "https://github.com/mechemfarm-cmd/open-agent-diary#readme",
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"
   }
