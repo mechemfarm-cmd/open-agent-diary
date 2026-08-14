@@ -1,18 +1,24 @@
 # Open Agent Diary
 
-Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration.
+**Your AI agent talks to you every day. Does it remember what it learned?**
+
+Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration. It gives your AI agent durable recall across sessions — and **gives you** the transparency to see exactly what it remembers, where that memory came from, and correct it when it's wrong.
+
+![Open Agent Diary demo](docs/demo.gif)
 
 The app is built around a simple loop:
 
-1. **Search or browse** for something you remember.
-2. **Read the source record** as the primary evidence.
-3. **Correct or inspect** supporting layers when needed.
+1. **Search or browse** for something your agent worked on.
+2. **Read the source record** — the actual conversation, not a summary.
+3. **Correct or inspect** the generated layers (memory, summaries, follow-ups) that your agent relies on.
 
-Under the hood it keeps raw entries, work traces, and generated search/summary artifacts separate. The core rule is simple: **generated memory is never the hidden source of truth.** Users can inspect the source records and the generated layers that agents rely on.
+The core rule: **generated memory is never the hidden source of truth.** Everything an agent knows can be traced back to a raw entry you can inspect.
 
-## Supported v0.1 release path
+## Who is this for?
 
-The supported v0.1 shape is the Python local server plus the browser UI served from that same process. In other words: the UI is included and supported for v0.1 use. The Tauri desktop shell in `src-tauri/` is experimental/development-only right now: it does not bundle or start the Python backend, so do not treat generated desktop bundles as standalone release artifacts yet.
+- **Hermes / Claude Code / AI agent users** who want persistent recall across sessions
+- **Developers** who want transparent, explainable agent memory — not a black box
+- **Anyone** who's tired of their assistant forgetting things between conversations
 
 ## Quick start
 
@@ -46,15 +52,14 @@ agent-diary doctor --json
 
 ## What is included
 
-- Local HTTP API and static browser UI
-- Append-only raw entry store on disk
-- SQLite metadata/search index
-- FTS5 acceleration for memory and work-trace search
-- Work-trace layer for operational evidence
-- Generated artifacts for summaries, search memory, and possible follow-ups
-- Read-only `doctor` command for consistency checks
-- Transparent monthly archives for old raw entries (`data/archives/*.tar.gz`)
-- Synthetic examples only — no real chat history ships with the project
+- **Browser UI** — search, browse, read, and annotate entries
+- **CLI tools** — import sessions, produce memory artifacts, consistency checks
+- **REST API** — query memory, work traces, and raw entries programmatically
+- **Append-only raw store** — entries cannot be silently modified, only annotated
+- **SQLite + FTS5** — fast full-text search across memory and work traces
+- **Generated artifacts** — conversation briefs, compressed memory, open loops
+- **Monthly archives** — automatic rotation of old raw entries
+- **MCP server** — integrate directly with Claude Desktop and other MCP-compatible agents
 
 ## Project layout
 
@@ -74,6 +79,7 @@ Start with:
 
 - `AGENTS.md`
 - `docs/agent-integration.md`
+- `agent-diary-mcp.py` — MCP server for direct Claude Desktop integration
 
 The intended recall flow is:
 
@@ -86,7 +92,7 @@ The intended recall flow is:
 
 Open Agent Diary is designed so each installation gathers **your own data locally**. The public repository contains only code, docs, tests, and synthetic fixtures.
 
-By default the server command in this README binds to `127.0.0.1`, meaning only the current machine can reach it. The diary can contain private conversation memory, local file paths, and work traces. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network with firewall/Tailscale restrictions and understand that the current v0.1 API has unauthenticated write routes.
+By default the server binds to `127.0.0.1`, meaning only the current machine can reach it. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network and understand that the current v0.1 API has unauthenticated write routes.
 
 ## Development checks
 
