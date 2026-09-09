@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -768,37 +770,6 @@ def _query_terms(query: str) -> list[str]:
     return [t for t in re.findall(r"\w+", query.lower()) if t]
 
 
-def _parse_date_only_query(query: str) -> str | None:
-    """Return YYYY-MM-DD for a date-only human query, or None.
-
-    Text search treats punctuation as token separators, so a query like
-    ``7/19/26`` becomes loose tokens (7, 19, 26) and matches unrelated logs.
-    Date-looking queries should instead mean "entries from that date".
-    """
-    text = query.strip()
-    if not text:
-        return None
-
-    iso_match = re.fullmatch(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})", text)
-    if iso_match:
-        year, month, day = (int(part) for part in iso_match.groups())
-    else:
-        slash_match = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})", text)
-        if not slash_match:
-            return None
-        month, day, raw_year = slash_match.groups()
-        month = int(month)
-        day = int(day)
-        year = int(raw_year)
-        if year < 100:
-            year += 2000
-
-    try:
-        return datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
-    except ValueError:
-        return None
-
-
 def _score_match_text(text: str, query: str) -> dict[str, int]:
     lowered = text.lower()
     terms = _query_terms(query)
@@ -1137,39 +1108,6 @@ def _search_raw_entries(paths: Paths, query: str, limit: int) -> list[dict[str, 
     )
 
 
-def _search_entries_by_date(
-    paths: Paths,
-    *,
-    iso_date: str,
-    limit: int,
-    rows: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    candidate_rows = rows if rows is not None else list_entry_rows(paths.sqlite_path, limit=1000000, offset=0)
-    matches: list[dict[str, Any]] = []
-    for row in candidate_rows:
-        created_at = str(row.get("created_at", ""))
-        if not created_at.startswith(iso_date):
-            continue
-        body = _effective_entry_body_from_row(paths, row)
-        content = str(body.get("content", ""))
-        matches.append(
-            {
-                "entry_id": row["entry_id"],
-                "artifact_id": None,
-                "indexed_at": created_at,
-                "match_text": _build_preview(content, size=240),
-                "match_layer": "date_filter",
-                "supporting_layers": ["raw_entry"],
-                "entry_type": body.get("entry_type", "unknown"),
-                "source": row["source"],
-                "author_role": row["author_role"],
-                "fetch_raw_entry": {"entry_id": row["entry_id"]},
-            }
-        )
-    matches.sort(key=lambda item: str(item.get("indexed_at", "")), reverse=True)
-    return matches[:limit]
-
-
 def _search_raw_entries_in_rows(
     paths: Paths,
     *,
@@ -1208,15 +1146,17 @@ def _search_raw_entries_in_rows(
 
 
 def _rows_matching_provenance_scope(paths: Paths, filters: dict[str, Any]) -> list[dict[str, Any]]:
-    return list_entry_rows(
-        paths.sqlite_path,
-        limit=1000000,
-        offset=0,
-        source_conversation_id=_normalize_optional_str(filters.get("source_conversation_id")),
-        source_session_id=_normalize_optional_str(filters.get("source_session_id")),
-        import_id=_normalize_optional_str(filters.get("import_id")),
-        truthful_only=bool(filters.get("truthful_only", False)),
-    )
+    rows = list_entry_rows(paths.sqlite_path, limit=1000000, offset=0)
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        raw_file = Path(str(row["raw_file_path"]))
+        if not raw_file.exists():
+            continue
+        body = json.loads(raw_file.read_text(encoding="utf-8"))
+        provenance = _resolve_entry_provenance_from_body(body)
+        if _entry_matches_provenance_scope(provenance, filters):
+            matched.append(row)
+    return matched
 
 
 def _search_compressed_entries_in_rows(
@@ -1465,35 +1405,6 @@ def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
     filters = _resolve_provenance_filters(payload)
     scoped_rows = _rows_matching_provenance_scope(paths, filters) if any(filters.values()) else []
 
-    date_filter = _parse_date_only_query(query)
-    if date_filter:
-        date_matches = _search_entries_by_date(
-            paths,
-            iso_date=date_filter,
-            limit=limit,
-            rows=scoped_rows if scoped_rows else None,
-        )
-        return {
-            "query": query,
-            "limit": limit,
-            "filters": {
-                "source_conversation_id": filters.get("source_conversation_id"),
-                "source_session_id": filters.get("source_session_id"),
-                "import_id": filters.get("import_id"),
-                "truthful_only": bool(filters.get("truthful_only", False)),
-                "created_date": date_filter,
-            },
-            "matches": date_matches,
-            "match_summary": {
-                "compressed_memory_hits": 0,
-                "raw_entry_hits": len(date_matches),
-                "entry_matches": len(date_matches),
-                "using_raw_layer": bool(date_matches),
-                "date_filter": date_filter,
-            },
-            "note": "Date-only search detected; returning entries whose created_at date matches the requested day.",
-        }
-
     compressed_matches = search_index(paths.sqlite_path, query=query, limit=max(limit * 10, 200))
     linked_matches: list[dict[str, Any]] = []
     for row in compressed_matches:
@@ -1667,17 +1578,15 @@ def list_entries(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
     open_loop_participation = _build_open_loop_participation(paths)
     needs_provenance_filter = any([source_conversation_id, source_session_id, import_id, truthful_only])
     if only_with_open_loops or needs_provenance_filter:
-        all_rows = list_entry_rows(
-            paths.sqlite_path,
-            limit=1000000,
-            offset=0,
-            source_conversation_id=source_conversation_id,
-            source_session_id=source_session_id,
-            import_id=import_id,
-            truthful_only=truthful_only,
-        )
+        all_rows = list_entry_rows(paths.sqlite_path, limit=1000000, offset=0)
         filtered_rows: list[dict[str, Any]] = []
         for row in all_rows:
+            raw_file = Path(str(row["raw_file_path"]))
+            body = json.loads(raw_file.read_text(encoding="utf-8"))
+            provenance = _resolve_entry_provenance_from_body(body)
+            if not _entry_matches_provenance_scope(provenance, filters):
+                continue
+
             loop_info = open_loop_participation.get(str(row["entry_id"]))
             if only_with_open_loops and not (loop_info and int(loop_info.get("count", 0)) > 0):
                 continue
@@ -2241,3 +2150,566 @@ def status(paths: Paths) -> dict[str, Any]:
         "data_root": str(paths.data_root),
         "sqlite_path": str(paths.sqlite_path),
     }
+
+
+# ── Knowledge Graph handlers ───────────────────────────────────────────
+
+
+def _entry_exists(paths: Paths, entry_id: str) -> bool:
+    from agent_diary.index.repository import get_entry_row
+    return get_entry_row(paths.sqlite_path, entry_id) is not None
+
+
+def _source_exists(paths: Paths, source_kind: str, source_id: str) -> bool:
+    if source_kind == "raw_entry":
+        return _entry_exists(paths, source_id)
+    if source_kind == "user_assertion":
+        return True  # always valid
+    # work_trace and overlay support for v1: skip existence check
+    return True
+
+
+def _resolve_entity_id(paths: Paths, entity_ref: str) -> str:
+    """Resolve an entity reference — either a raw entity_id or a name to look up."""
+    from agent_diary.index.graph_repository import get_entity, find_entity
+    # Check if it's already an entity_id (starts with ge_)
+    if entity_ref.startswith("ge_"):
+        existing = get_entity(paths.sqlite_path, entity_ref)
+        if existing:
+            return existing["entity_id"]
+    # Try looking up by name
+    found = find_entity(paths.sqlite_path, entity_ref)
+    if len(found) == 1:
+        return found[0]["entity_id"]
+    raise ValueError(f"entity not found: {entity_ref}")
+
+
+def graph_find_entity(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["query"])
+    from agent_diary.index.graph_repository import find_entity
+    results = find_entity(paths.sqlite_path, payload["query"], payload.get("entity_type"))
+    return {"results": results, "count": len(results)}
+
+
+def graph_get_entity(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["entity_id"])
+    from agent_diary.index.graph_repository import get_entity, get_current_facts_for_subject, get_facts_for_entity
+    from agent_diary.index.graph_repository import list_aliases
+    entity_id = _resolve_entity_id(paths, payload["entity_id"])
+    entity = get_entity(paths.sqlite_path, entity_id)
+    if not entity:
+        raise FileNotFoundError(f"entity not found: {entity_id}")
+    include_history = bool(payload.get("include_history", False))
+    states = payload.get("states", ["current"])
+    current_facts = get_current_facts_for_subject(paths.sqlite_path, entity_id)
+    if include_history:
+        all_facts = get_facts_for_entity(paths.sqlite_path, entity_id, states=states, include_history=True)
+    else:
+        all_facts = None
+    aliases = list_aliases(paths.sqlite_path, entity_id)
+    result = {
+        "entity": entity,
+        "current_facts": current_facts,
+        "aliases": aliases,
+    }
+    if all_facts is not None:
+        result["all_facts"] = all_facts
+    return result
+
+
+def graph_neighbors(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["entity_id"])
+    from agent_diary.index.graph_repository import get_neighbors
+    entity_id = _resolve_entity_id(paths, payload["entity_id"])
+    states = payload.get("states", ["current"])
+    result = get_neighbors(paths.sqlite_path, entity_id, states=states)
+    return result
+
+
+def graph_search(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["query"])
+    from agent_diary.index.graph_repository import find_entity, search_facts
+    query = payload["query"]
+    states = payload.get("states", ["current"])
+    entities = find_entity(paths.sqlite_path, query)
+    facts = search_facts(paths.sqlite_path, query, states=states)
+    return {"entities": entities, "facts": facts, "entity_count": len(entities), "fact_count": len(facts)}
+
+
+def graph_explain_fact(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["fact_id"])
+    from agent_diary.index.graph_repository import get_fact, get_evidence_for_fact
+    fact_id = payload["fact_id"]
+    fact = get_fact(paths.sqlite_path, fact_id)
+    if not fact:
+        raise FileNotFoundError(f"fact not found: {fact_id}")
+    evidence = get_evidence_for_fact(paths.sqlite_path, fact_id)
+    return {"fact": fact, "evidence": evidence, "evidence_count": len(evidence)}
+
+
+def graph_get_subgraph(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["entity_id"])
+    from agent_diary.index.graph_repository import get_entity, get_neighbors
+    entity_id = _resolve_entity_id(paths, payload["entity_id"])
+    entity = get_entity(paths.sqlite_path, entity_id)
+    if not entity:
+        raise FileNotFoundError(f"entity not found: {entity_id}")
+    states = payload.get("states", ["current"])
+    depth = int(payload.get("depth", 1))
+    neighbors = get_neighbors(paths.sqlite_path, entity_id, states=states)
+    result = {
+        "center": entity,
+        "outgoing_facts": neighbors["outgoing"],
+        "incoming_facts": neighbors["incoming"],
+    }
+    return result
+
+
+def graph_add_fact(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["subject_id", "predicate", "object_kind"])
+    from agent_diary.models.types import GraphFact, GraphFactEvidence, GraphAssertionEvent
+    from agent_diary.index.graph_repository import (
+        insert_fact, insert_evidence, insert_assertion_event,
+        close_current_fact, valid_predicate,
+    )
+    from uuid import uuid4
+
+    subject_id = _resolve_entity_id(paths, payload["subject_id"])
+    predicate = payload["predicate"].upper()
+    object_kind = payload["object_kind"]
+
+    if not valid_predicate(predicate):
+        raise ValueError(f"invalid predicate: {predicate}")
+
+    object_entity_id = None
+    object_value = None
+    object_value_type = None
+    if object_kind == "entity":
+        _require_fields(payload, ["object_entity_id"])
+        object_entity_id = _resolve_entity_id(paths, payload["object_entity_id"])
+    else:
+        _require_fields(payload, ["object_value"])
+        object_value = str(payload["object_value"])
+        object_value_type = payload.get("object_value_type", "text")
+
+    source_kind = payload.get("source_kind", "user_assertion")
+    source_id = payload.get("source_id", "manual")
+    source_timestamp = payload.get("source_timestamp", _now())
+
+    # Check source exists for raw_entry references
+    if not _source_exists(paths, source_kind, source_id):
+        raise ValueError(f"source not found: {source_kind}/{source_id}")
+
+    # For single-value predicates, close current fact first
+    from agent_diary.models.types import PREDICATE_REGISTRY
+    cardinality = PREDICATE_REGISTRY.get(predicate, {}).get("cardinality", "multi")
+    old_fact_id = None
+    if cardinality == "single":
+        old_fact_id = close_current_fact(paths.sqlite_path, subject_id, predicate, valid_to=source_timestamp)
+
+    # Create fact
+    fact = GraphFact(
+        subject_entity_id=subject_id,
+        predicate=predicate,
+        object_kind=object_kind,
+        object_entity_id=object_entity_id,
+        object_value=object_value,
+        object_value_type=object_value_type,
+        valid_from=source_timestamp,
+    )
+    fact_id = insert_fact(paths.sqlite_path, fact)
+
+    # Link old -> new if superseded
+    if old_fact_id:
+        from agent_diary.index.graph_repository import supersede_fact
+        supersede_fact(paths.sqlite_path, old_fact_id, fact_id)
+
+    # Add evidence
+    evidence = GraphFactEvidence(
+        fact_id=fact_id,
+        source_kind=source_kind,
+        source_id=source_id,
+        source_timestamp=source_timestamp,
+        role="establishes",
+    )
+    insert_evidence(paths.sqlite_path, evidence)
+
+    # Record assertion event
+    event = GraphAssertionEvent(
+        event_type="fact_added",
+        author=payload.get("author", "user"),
+        reason=payload.get("reason", ""),
+        payload={
+            "fact_id": fact_id,
+            "predicate": predicate,
+            "superseded_fact_id": old_fact_id,
+            "subject_entity_id": subject_id,
+        },
+    )
+    insert_assertion_event(paths.sqlite_path, event)
+
+    return {
+        "fact_id": fact_id,
+        "predicate": predicate,
+        "superseded_fact_id": old_fact_id,
+    }
+
+
+def graph_correct_fact(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["fact_id", "correction", "reason"])
+    from agent_diary.models.types import GraphFact, GraphFactEvidence, GraphAssertionEvent
+    from agent_diary.index.graph_repository import get_fact, close_current_fact, insert_fact, insert_evidence, insert_assertion_event, supersede_fact
+    from uuid import uuid4
+
+    fact_id = payload["fact_id"]
+    correction = payload["correction"]
+    reason = payload["reason"]
+    old_fact = get_fact(paths.sqlite_path, fact_id)
+    if not old_fact:
+        raise FileNotFoundError(f"fact not found: {fact_id}")
+    if old_fact["state"] != "current":
+        raise ValueError(f"can only correct current facts, state is: {old_fact['state']}")
+
+    # Close the old fact
+    now = _now()
+    close_current_fact(paths.sqlite_path, old_fact["subject_entity_id"], old_fact["predicate"], valid_to=now)
+
+    # Parse correction — it's either a new object_entity_id or new object_value
+    from agent_diary.index.graph_repository import resolve_obvious_alias, get_entity
+    object_entity_id = None
+    object_value = None
+    object_kind = old_fact.get("object_kind", "value")
+    # Try resolving correction as an entity reference
+    resolved = resolve_obvious_alias(paths.sqlite_path, correction)
+    if resolved:
+        object_entity_id = resolved
+        object_kind = "entity"
+    elif correction.startswith("ge_"):
+        if get_entity(paths.sqlite_path, correction):
+            object_entity_id = correction
+            object_kind = "entity"
+    else:
+        object_value = correction
+        object_kind = old_fact.get("object_kind", "value")
+
+    # Create new fact
+    new_fact = GraphFact(
+        subject_entity_id=old_fact["subject_entity_id"],
+        predicate=old_fact["predicate"],
+        object_kind=object_kind,
+        object_entity_id=object_entity_id,
+        object_value=object_value,
+        valid_from=now,
+    )
+    new_fact_id = insert_fact(paths.sqlite_path, new_fact)
+    supersede_fact(paths.sqlite_path, fact_id, new_fact_id)
+
+    # Evidence for correction
+    evidence = GraphFactEvidence(
+        fact_id=new_fact_id,
+        source_kind="user_assertion",
+        source_id=f"correction:{fact_id}",
+        source_timestamp=now,
+        role="supersedes",
+    )
+    insert_evidence(paths.sqlite_path, evidence)
+
+    # Assertion event
+    event = GraphAssertionEvent(
+        event_type="fact_corrected",
+        author=payload.get("author", "user"),
+        reason=reason,
+        payload={
+            "old_fact_id": fact_id,
+            "new_fact_id": new_fact_id,
+            "predicate": old_fact["predicate"],
+            "correction": correction,
+        },
+    )
+    insert_assertion_event(paths.sqlite_path, event)
+
+    return {"old_fact_id": fact_id, "new_fact_id": new_fact_id, "predicate": old_fact["predicate"]}
+
+
+def graph_merge_alias(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["entity_id", "alias"])
+    from agent_diary.index.graph_repository import list_aliases
+    from uuid import uuid4
+    entity_id = _resolve_entity_id(paths, payload["entity_id"])
+    alias_text = payload["alias"]
+    source_kind = payload.get("source_kind", "user_assertion")
+    source_id = payload.get("source_id", "manual")
+    alias_id = f"alias_{uuid4().hex}"
+    from agent_diary.index.graph_repository import insert_alias
+    insert_alias(paths.sqlite_path, alias_id, entity_id, alias_text, source_kind, source_id)
+    aliases = list_aliases(paths.sqlite_path, entity_id)
+    return {"alias_id": alias_id, "entity_id": entity_id, "alias": alias_text, "total_aliases": len(aliases)}
+
+
+def graph_split_entity(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["entity_id"])
+    from agent_diary.index.graph_repository import get_entity, update_entity, insert_assertion_event
+    from agent_diary.models.types import GraphAssertionEvent
+    entity_id = _resolve_entity_id(paths, payload["entity_id"])
+    entity = get_entity(paths.sqlite_path, entity_id)
+    if not entity:
+        raise FileNotFoundError(f"entity not found: {entity_id}")
+    if entity["lifecycle_status"] != "merged":
+        raise ValueError(f"entity {entity_id} is not merged")
+    update_entity(paths.sqlite_path, entity_id, {"lifecycle_status": "active", "merged_into_entity_id": None})
+    event = GraphAssertionEvent(
+        event_type="entity_split",
+        author=payload.get("author", "user"),
+        reason=payload.get("reason", ""),
+        payload={"entity_id": entity_id},
+    )
+    insert_assertion_event(paths.sqlite_path, event)
+    return {"entity_id": entity_id, "status": "active"}
+
+
+def graph_claim_jobs(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    from agent_diary.index.graph_repository import claim_extraction_jobs
+    limit = int(payload.get("limit", 10))
+    worker_id = payload.get("worker_id", "hermes")
+    lease_seconds = int(payload.get("lease_seconds", 300))
+    jobs = claim_extraction_jobs(paths.sqlite_path, limit=limit, worker_id=worker_id, lease_seconds=lease_seconds)
+    return {"claimed": len(jobs), "jobs": jobs}
+
+
+def graph_fetch_source(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["job_id"])
+    from agent_diary.index.repository import get_entry_row
+    from agent_diary.storage.entry_reader import fetch_raw_entry
+
+    job_id = payload["job_id"]
+    # Look up the job to find source_kind and source_id
+    with closing(sqlite3.connect(paths.sqlite_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT source_kind, source_id FROM graph_extraction_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    if not row:
+        raise FileNotFoundError(f"extraction job not found: {job_id}")
+    source_kind, source_id = row["source_kind"], row["source_id"]
+
+    if source_kind == "raw_entry":
+        entry_row = get_entry_row(paths.sqlite_path, source_id)
+        if not entry_row:
+            raise FileNotFoundError(f"source entry not found: {source_id}")
+        entry = fetch_raw_entry(paths, source_id)
+        return {
+            "job_id": job_id,
+            "source_kind": source_kind,
+            "source_id": source_id,
+            "source_timestamp": entry_row["created_at"],
+            "content": entry.get("content", ""),
+            "author_role": entry_row["author_role"],
+        }
+    elif source_kind == "user_assertion":
+        return {"job_id": job_id, "source_kind": source_kind, "source_id": source_id, "content": ""}
+    raise ValueError(f"unsupported source_kind: {source_kind}")
+
+
+def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["job_id", "result"])
+    from agent_diary.index.graph_repository import update_extraction_job
+
+    job_id = payload["job_id"]
+    result = payload["result"]
+    status = "succeeded"
+    summary = ""
+
+    if result.get("no_facts"):
+        status = "no_facts"
+        summary = result.get("reason", "no facts extracted")
+    else:
+        # Process proposed entities and facts
+        entities_created = 0
+        facts_created = 0
+
+        from agent_diary.index.graph_repository import (
+            get_entity, find_entity, resolve_obvious_alias,
+            insert_entity, insert_fact, insert_evidence, close_current_fact,
+            insert_alias, insert_assertion_event, valid_predicate,
+        )
+        from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence, GraphAssertionEvent
+        from agent_diary.index.repository import get_entry_row
+        from uuid import uuid4
+
+        source_kind = result.get("source_kind", "raw_entry")
+        source_id = result.get("source_id", "")
+
+        # Create entities
+        for ent in result.get("entities", []):
+            name = ent.get("name", "")
+            if not name:
+                continue
+            existing = resolve_obvious_alias(paths.sqlite_path, name)
+            if existing:
+                continue  # already exists
+            entity = GraphEntity(
+                canonical_name=name,
+                entity_type=ent.get("type", "other"),
+            )
+            insert_entity(paths.sqlite_path, entity)
+            entities_created += 1
+
+            # Add alias from source
+            alias_id = f"alias_{uuid4().hex}"
+            insert_alias(paths.sqlite_path, alias_id, entity.entity_id, name, source_kind, source_id)
+
+        # Create facts
+        for fact_data in result.get("facts", []):
+            subj_name = fact_data.get("subject", "")
+            obj_name = fact_data.get("object", "")
+            predicate = fact_data.get("predicate", "").upper()
+
+            if not subj_name or not predicate:
+                continue
+            if not valid_predicate(predicate):
+                continue
+
+            # Resolve subject
+            subj_id = resolve_obvious_alias(paths.sqlite_path, subj_name)
+            if not subj_id:
+                continue  # entity not yet in graph
+
+            # Resolve or create object
+            obj_id = resolve_obvious_alias(paths.sqlite_path, obj_name)
+            if not obj_id and obj_name:
+                # Create as new entity
+                obj_entity = GraphEntity(canonical_name=obj_name)
+                insert_entity(paths.sqlite_path, obj_entity)
+                obj_id = obj_entity.entity_id
+                entities_created += 1
+
+            if not obj_id:
+                continue
+
+            # Check for single-value predicate conflict
+            from agent_diary.models.types import PREDICATE_REGISTRY
+            cardinality = PREDICATE_REGISTRY.get(predicate, {}).get("cardinality", "multi")
+            if cardinality == "single":
+                close_current_fact(paths.sqlite_path, subj_id, predicate)
+
+            fact = GraphFact(
+                subject_entity_id=subj_id,
+                predicate=predicate,
+                object_kind="entity",
+                object_entity_id=obj_id,
+                confidence=fact_data.get("confidence", "medium"),
+            )
+            fact_id = insert_fact(paths.sqlite_path, fact)
+            facts_created += 1
+
+            # Evidence
+            ev = GraphFactEvidence(
+                fact_id=fact_id,
+                source_kind=source_kind,
+                source_id=source_id,
+                source_timestamp=fact_data.get("timestamp", _now()),
+                role="establishes",
+                extractor_method=result.get("extractor_method"),
+                extractor_version=result.get("extractor_version"),
+            )
+            insert_evidence(paths.sqlite_path, ev)
+
+        summary = f"created {entities_created} entities, {facts_created} facts"
+
+    update_extraction_job(paths.sqlite_path, job_id, status, result_summary=summary)
+    return {"job_id": job_id, "status": status, "summary": summary}
+
+
+def graph_fail_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_fields(payload, ["job_id", "error"])
+    from agent_diary.index.graph_repository import fail_extraction_job
+    job_id = payload["job_id"]
+    error = payload["error"]
+    retryable = bool(payload.get("retryable", True))
+    fail_extraction_job(paths.sqlite_path, job_id, error, retryable=retryable)
+    return {"job_id": job_id, "status": "pending" if retryable else "failed"}
+
+
+def graph_queue_status(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    from agent_diary.index.graph_repository import get_extraction_queue_status, release_stale_leases
+    # Auto-release stale leases on status check
+    released = release_stale_leases(paths.sqlite_path)
+    status = get_extraction_queue_status(paths.sqlite_path)
+    status["stale_leases_released"] = released
+    return status
+
+
+def graph_backfill(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    """Enqueue all eligible unprocessed source records."""
+    from agent_diary.index.graph_repository import enqueue_source_if_missing, get_extraction_queue_status
+    from agent_diary.index.repository import list_entry_rows, count_entry_rows
+
+    batch_size = int(payload.get("batch_size", 100))
+    limit = int(payload.get("limit", batch_size))
+    offset = int(payload.get("offset", 0))
+    dry_run = bool(payload.get("dry_run", False))
+
+    enqueued = 0
+    processed = 0
+
+    # Enqueue raw entries (no source filter in v1)
+    while True:
+        rows = list_entry_rows(paths.sqlite_path, limit=limit, offset=offset)
+        if not rows:
+            break
+        for row in rows:
+            processed += 1
+            if not dry_run:
+                enqueue_source_if_missing(
+                    paths.sqlite_path,
+                    "raw_entry",
+                    row["entry_id"],
+                    row["created_at"],
+                )
+                enqueued += 1
+        offset += limit
+
+    total = count_entry_rows(paths.sqlite_path)
+    q_status = get_extraction_queue_status(paths.sqlite_path) if not dry_run else {}
+    return {
+        "enqueued": enqueued if not dry_run else 0,
+        "scanned": processed,
+        "total_available": total,
+        "dry_run": dry_run,
+        "queue_status": q_status,
+    }
+
+
+def graph_backfill_status(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    from agent_diary.index.graph_repository import get_extraction_queue_status
+    from agent_diary.index.repository import count_entry_rows
+    total = count_entry_rows(paths.sqlite_path)
+    q = get_extraction_queue_status(paths.sqlite_path)
+    return {
+        "total_entries": total,
+        "queue": q,
+        "graph_empty": q.get("succeeded", 0) + q.get("no_facts", 0) == 0,
+    }
+
+
+def graph_enqueue_recent(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    """Enqueue recently written entries for extraction."""
+    from agent_diary.index.graph_repository import enqueue_source_if_missing
+    from agent_diary.index.repository import list_entry_rows
+    limit = int(payload.get("limit", 50))
+    rows = list_entry_rows(paths.sqlite_path, limit=limit)
+    enqueued = 0
+    for row in rows:
+        enqueue_source_if_missing(
+            paths.sqlite_path,
+            "raw_entry",
+            row["entry_id"],
+            row["created_at"],
+        )
+        enqueued += 1
+    return {"enqueued": enqueued}
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

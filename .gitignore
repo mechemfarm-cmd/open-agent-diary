@@ -37,3 +37,5 @@ backups/
 # Real conversation exports should not be committed as examples.
 examples/telegram*.jsonl
 examples/*real*.jsonl
+data/
+*.bak

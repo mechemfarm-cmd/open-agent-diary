@@ -3,155 +3,132 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Open Agent Diary</title>
-    <link rel="stylesheet" href="./styles.css?v=20260721a" />
+    <title>Agent Diary UI Shell</title>
+    <link rel="stylesheet" href="./styles.css?v=20260529b" />
   </head>
   <body>
-    <a class="skip-link" href="#detailBody">Skip to selected entry</a>
-
+    <a class="skip-link" href="#detailBody">Skip to diary entry</a>
     <header class="topbar" role="banner">
-      <div class="brand-block">
-        <p class="eyebrow">Local, inspectable agent memory</p>
-        <h1>Open Agent Diary</h1>
-        <p class="subtitle">Search what happened, read the source record, and correct it when needed.</p>
-      </div>
-      <details class="connection-panel">
-        <summary>Server connection</summary>
-        <div class="api-config" role="group" aria-label="API connection">
-          <label for="apiBase">Server URL</label>
-          <input id="apiBase" type="text" value="http://127.0.0.1:8041" autocomplete="off" placeholder="http://127.0.0.1:8041" />
-          <span id="statusDot" class="status-dot status-unknown" title="Connection status"></span>
-          <button id="reloadBtn">Connect</button>
+      <div class="mucha-masthead" aria-hidden="true">
+        <div class="mucha-halo">
+          <div class="mucha-figure"></div>
         </div>
-      </details>
+        <div class="mucha-ribbon mucha-ribbon-left"></div>
+        <div class="mucha-ribbon mucha-ribbon-right"></div>
+      </div>
+      <div class="title-stack">
+        <div class="eyebrow">Verbatim Memory and Derived Recall</div>
+        <h1>Agent Diary</h1>
+      </div>
+      <div class="api-config" role="group" aria-label="API connection">
+        <label for="apiBase">Server URL</label>
+        <input id="apiBase" type="text" value="http://127.0.0.1:8041" autocomplete="off" placeholder="http://your-server:8041" />
+        <span id="statusDot" class="status-dot status-unknown" title="Connection status"></span>
+        <button id="graphToggleBtn" type="button" title="Toggle knowledge graph view">Graph</button>
+        <button id="reloadBtn">Connect</button>
+      </div>
     </header>
 
-    <section class="onboarding-strip" aria-labelledby="howItWorksHeading">
-      <div>
-        <p class="step-label">How this works</p>
-        <h2 id="howItWorksHeading">Find it, read the source, then add context.</h2>
-      </div>
-      <ol class="onboarding-steps">
-        <li><strong>1. Search or browse</strong><span>Find a conversation, decision, or piece of work.</span></li>
-        <li><strong>2. Read the source record</strong><span>The stored raw entry is the primary evidence.</span></li>
-        <li><strong>3. Correct or inspect</strong><span>Notes and generated helpers never replace the source.</span></li>
-      </ol>
-      <p class="privacy-note">Local and private: data stays in this installation. This public repository ships synthetic examples only.</p>
-    </section>
-
     <main class="layout" role="main">
-      <aside class="nav-column" aria-label="Find entries">
+      <aside class="nav-column" aria-label="Search and timeline navigation">
+        <div id="scopeBar" class="scope-bar" aria-live="polite" aria-label="Active browse scope"></div>
         <section class="panel panel-search" aria-labelledby="searchHeading">
-          <div class="panel-heading">
-            <p class="step-label">Step 1</p>
-            <h2 id="searchHeading">Search your diary</h2>
-            <p class="help-text">Start here. Ask for a project, decision, promise, bug, command, or phrase; every result leads back to its source record.</p>
-          </div>
+          <h2 id="searchHeading">Search</h2>
           <form id="searchForm" class="search-form" role="search" aria-label="Search memory">
             <label for="searchInput" class="sr-only">Search memory</label>
-            <input id="searchInput" type="text" placeholder="Example: privacy review, failed test, release checklist" required />
-            <button type="submit" class="primary-btn">Search</button>
+            <input id="searchInput" type="text" placeholder="Search memory..." required />
+            <button type="submit">Search</button>
           </form>
           <p id="searchStatus" class="status-line" role="status" aria-live="polite"></p>
-          <ul id="searchResults" class="list scroll-list search-results" role="list" aria-label="Search result entries"></ul>
+          <ul id="searchResults" class="list scroll-list" role="list" aria-label="Search result entries"></ul>
         </section>
 
         <section class="panel panel-timeline" aria-labelledby="timelineHeading">
-          <div class="panel-heading row-heading">
-            <div>
-              <p class="step-label">Or browse</p>
-              <h2 id="timelineHeading">Recent entries</h2>
+          <h2 id="timelineHeading">Timeline</h2>
+          <form id="browseScopeForm" class="browse-scope" aria-label="Timeline browse scope">
+            <div class="scope-field">
+              <label for="scopeConversationId">Conversation</label>
+              <input id="scopeConversationId" type="text" placeholder="telegram:713733361" />
             </div>
-            <div class="panel-actions compact-actions">
-              <button id="prevPageBtn" aria-label="Previous entries page">Prev</button>
-              <button id="nextPageBtn" aria-label="Next entries page">Next</button>
+            <div class="scope-field">
+              <label for="scopeImportId">Import</label>
+              <input id="scopeImportId" type="text" placeholder="import-telegram-direct-..." />
             </div>
+            <div class="scope-actions">
+              <label class="scope-toggle">
+                <input id="scopeTruthfulOnly" type="checkbox" />
+                Truthful only
+              </label>
+              <button type="submit">Apply</button>
+              <button id="clearScopeBtn" type="button">Clear</button>
+            </div>
+          </form>
+          <div class="panel-actions">
+            <button id="prevPageBtn" aria-label="Previous timeline page">Prev</button>
+            <button id="nextPageBtn" aria-label="Next timeline page">Next</button>
           </div>
-
-          <div id="scopeBar" class="scope-bar" aria-live="polite" aria-label="Active browse scope"></div>
-
-          <details class="advanced-tools" aria-label="Advanced browsing filters">
-            <summary>Advanced filters and imports</summary>
-            <form id="browseScopeForm" class="browse-scope" aria-label="Timeline browse scope">
-              <div class="scope-field">
-                <label for="scopeConversationId">Conversation ID</label>
-                <input id="scopeConversationId" type="text" placeholder="chat:demo-conversation" />
+          <details class="import-inspector" aria-label="Recent import batches">
+            <summary id="importsHeading">
+              <span class="summary-title">Recent Imports</span>
+              <span id="importsStatus" class="summary-status" role="status" aria-live="polite"></span>
+            </summary>
+            <div class="import-inspector-body">
+              <div class="panel-actions compact-actions">
+                <button id="refreshImportsBtn" type="button" aria-label="Refresh import batches" title="Refresh import batches">↻</button>
               </div>
-              <div class="scope-field">
-                <label for="scopeImportId">Import ID</label>
-                <input id="scopeImportId" type="text" placeholder="demo" />
-              </div>
-              <div class="scope-actions">
-                <label class="scope-toggle">
-                  <input id="scopeTruthfulOnly" type="checkbox" />
-                  Imported source records only
-                </label>
-                <button type="submit">Apply filters</button>
-                <button id="clearScopeBtn" type="button">Clear</button>
-              </div>
-            </form>
-
-            <details class="import-inspector" aria-label="Recent import batches">
-              <summary id="importsHeading">
-                <span class="summary-title">Recent imports</span>
-                <span id="importsStatus" class="summary-status" role="status" aria-live="polite"></span>
-              </summary>
-              <div class="import-inspector-body">
-                <div class="panel-actions compact-actions">
-                  <button id="refreshImportsBtn" type="button" aria-label="Refresh import batches" title="Refresh import batches">Refresh</button>
-                </div>
-                <ul id="importsList" class="list import-list" role="list" aria-label="Recent import batches"></ul>
-              </div>
-            </details>
+              <ul id="importsList" class="list import-list" role="list" aria-label="Recent import batches"></ul>
+            </div>
           </details>
-
           <p id="timelineStatus" class="status-line" role="status" aria-live="polite"></p>
           <ul id="timelineList" class="list scroll-list" role="list" aria-label="Diary timeline entries"></ul>
         </section>
       </aside>
 
       <section class="panel panel-detail" aria-labelledby="detailHeading">
-        <div class="panel-heading detail-heading">
-          <div>
-            <p class="step-label">Step 2</p>
-            <h2 id="detailHeading">Source record</h2>
-            <p class="help-text"><strong>Primary truth layer.</strong> Read this first; summaries, memory, and follow-ups are helpers.</p>
-          </div>
-        </div>
+        <h2 id="detailHeading">Diary Entry</h2>
         <p id="detailStatus" class="status-line" role="status" aria-live="polite"></p>
         <div id="recallBanner" class="recall-banner" hidden aria-label="Memory recall origin" aria-live="polite"></div>
         <div id="detailMeta" class="meta" aria-label="Entry metadata"></div>
-        <article id="detailBody" class="raw-body" tabindex="-1">
-          <div class="empty-state">
-            <h3>Choose a source record.</h3>
-            <p>Search for something you remember, or browse recent entries. The full stored entry appears here.</p>
-            <p>If it needs context or is misleading, use <strong>Correct / annotate</strong>. Your note does not overwrite the original.</p>
-          </div>
-        </article>
-        <div id="artifactStatusBar" class="artifact-status-bar" aria-label="Entry support status" aria-live="polite"></div>
+        <div id="graphView" class="graph-view" hidden aria-label="Knowledge graph view"></div>
+        <article id="detailBody" class="raw-body" tabindex="-1">Select an entry to view raw detail.</article>
+        <div id="artifactStatusBar" class="artifact-status-bar" aria-label="Artifact status" aria-live="polite"></div>
       </section>
 
-      <aside class="panel panel-interpretation" role="complementary" aria-label="Correction and transparency tools">
-        <div class="panel-heading">
-          <p class="step-label">Step 3</p>
-          <h2>Correct or inspect</h2>
-          <p class="help-text">Add human context, then inspect generated helpers only when they are useful.</p>
-        </div>
+      <aside class="panel panel-interpretation" role="complementary" aria-label="Derived interpretation and annotations">
         <div id="interpHeader" class="interp-header"></div>
-        <div class="tab-bar" role="tablist" aria-label="Entry support sections">
-          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="annotations" id="tab-annotations-btn">Correct / annotate</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="derived" id="tab-derived-btn">Generated helpers</button>
-          <button class="tab-btn" role="tab" aria-selected="false" data-tab="actions" id="tab-actions-btn">Advanced</button>
+        <div class="tab-bar" role="tablist" aria-label="Detail sections">
+          <button class="tab-btn active" role="tab" aria-selected="true" data-tab="derived" id="tab-derived-btn">Derived</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="annotations" id="tab-annotations-btn">Annotations</button>
+          <button class="tab-btn" role="tab" aria-selected="false" data-tab="actions" id="tab-actions-btn">Actions</button>
         </div>
 
-        <div id="tab-annotations" class="tab-panel active" role="tabpanel" aria-labelledby="tab-annotations-btn">
-          <section class="plain-card">
-            <h3>Make the record clearer</h3>
-            <p>Add an annotation for context or a correction when the record is misleading. These notes sit beside the source; they never overwrite it.</p>
-          </section>
-          <details id="overlayDetails" aria-label="Corrections and annotations" open>
-            <summary>Corrections and annotations</summary>
-            <form id="overlayForm" class="overlay-form" aria-label="Add correction or annotation">
+        <!-- Derived tab -->
+        <div id="tab-derived" class="tab-panel active" role="tabpanel" aria-labelledby="tab-derived-btn">
+          <details id="loopDetails" aria-label="Open loop analysis">
+            <summary>Open Loops</summary>
+            <ul id="loopList" class="list secondary layer-list" role="list" aria-label="Open loop analysis items"></ul>
+          </details>
+          <div class="detail-support-stack" aria-label="Supporting interpretation layers">
+            <details id="briefDetails" aria-label="Conversation brief layer">
+              <summary>Conversation Brief</summary>
+              <div id="briefBody" class="brief-detail">No conversation brief is attached to this entry yet.</div>
+            </details>
+            <details id="memoryDetails" aria-label="Compressed memory layer" hidden>
+              <summary>Compressed Memory (Agent Layer)</summary>
+              <ul id="memoryArtifactList" class="list secondary layer-list" role="list" aria-label="Compressed memory artifacts"></ul>
+            </details>
+            <details id="workTraceDetails" aria-label="Agent work trace">
+              <summary>Agent Work</summary>
+              <ul id="workTraceList" class="list secondary layer-list" role="list" aria-label="Agent work events"></ul>
+            </details>
+          </div>
+        </div>
+
+        <!-- Annotations tab -->
+        <div id="tab-annotations" class="tab-panel" role="tabpanel" aria-labelledby="tab-annotations-btn">
+          <details id="overlayDetails" aria-label="Overlay annotations">
+            <summary>Overlays (Annotations / Corrections)</summary>
+            <form id="overlayForm" class="overlay-form" aria-label="Add overlay annotation">
               <label for="overlayType">Type</label>
               <select id="overlayType">
                 <option value="annotation">annotation</option>
@@ -159,54 +136,28 @@
               </select>
               <label for="overlayAuthor">Author</label>
               <input id="overlayAuthor" type="text" placeholder="operator" required />
-              <label for="overlayContent">Note</label>
-              <textarea id="overlayContent" rows="4" placeholder="Add context, a correction, or a follow-up note..." required></textarea>
-              <button id="overlaySubmitBtn" type="submit" class="primary-btn">Save note</button>
+              <label for="overlayContent">Content</label>
+              <textarea id="overlayContent" rows="3" placeholder="Add annotation or correction..." required></textarea>
+              <button id="overlaySubmitBtn" type="submit">Add Overlay</button>
             </form>
             <p id="overlayStatus" class="status-line" role="status" aria-live="polite"></p>
             <ul id="overlayList" class="list secondary layer-list" role="list" aria-label="Entry overlays"></ul>
           </details>
-        </div>
-
-        <div id="tab-derived" class="tab-panel" role="tabpanel" aria-labelledby="tab-derived-btn">
-          <section class="plain-card">
-            <h3>Generated helpers</h3>
-            <p>These are generated from source records. They help search and skimming, but they are not the authority.</p>
-          </section>
-          <details id="briefDetails" aria-label="Conversation summary layer" open>
-            <summary>Generated summary</summary>
-            <div id="briefBody" class="brief-detail">No summary is attached to this entry yet.</div>
-          </details>
-          <details id="loopDetails" aria-label="Possible follow-up items">
-            <summary>Possible follow-ups</summary>
-            <ul id="loopList" class="list secondary layer-list" role="list" aria-label="Open loop analysis items"></ul>
-          </details>
-          <details id="workTraceDetails" aria-label="Recorded agent work">
-            <summary>Recorded agent work</summary>
-            <ul id="workTraceList" class="list secondary layer-list" role="list" aria-label="Agent work events"></ul>
-          </details>
-        </div>
-
-        <div id="tab-actions" class="tab-panel" role="tabpanel" aria-labelledby="tab-actions-btn">
-          <section class="plain-card warning-card">
-            <h3>Advanced transparency</h3>
-            <p>This area exposes generated memory artifacts, provenance, support files, and regeneration tools.</p>
-          </section>
-          <details id="memoryDetails" aria-label="Compressed memory layer" hidden>
-            <summary>Generated search memory</summary>
-            <ul id="memoryArtifactList" class="list secondary layer-list" role="list" aria-label="Compressed memory artifacts"></ul>
-          </details>
           <details id="artifactDetails" aria-label="Secondary artifact metadata">
-            <summary>Other support artifacts</summary>
+            <summary>Derived / Support Artifacts</summary>
             <ul id="artifactList" class="list secondary layer-list" role="list" aria-label="Entry artifacts"></ul>
           </details>
+        </div>
+
+        <!-- Actions tab -->
+        <div id="tab-actions" class="tab-panel" role="tabpanel" aria-labelledby="tab-actions-btn">
           <details id="refreshDerivedDetails" aria-label="Refresh derived layers">
-            <summary>Regenerate summaries and memory</summary>
+            <summary>Refresh Derived Layers</summary>
             <p id="refreshDerivedScope" class="status-line compact-status" role="status" aria-live="polite"></p>
             <div class="refresh-derived-actions">
-              <button id="refreshBriefsBtn" type="button">Refresh summary</button>
-              <button id="refreshOpenLoopsBtn" type="button">Refresh follow-ups</button>
-              <button id="refreshMemoryBtn" type="button">Refresh search memory</button>
+              <button id="refreshOpenLoopsBtn" type="button">Refresh Open Loops</button>
+              <button id="refreshBriefsBtn" type="button">Refresh Conversation Briefs</button>
+              <button id="refreshMemoryBtn" type="button">Refresh Compressed Memory</button>
             </div>
             <p id="refreshDerivedStatus" class="status-line" role="status" aria-live="polite"></p>
           </details>
@@ -214,6 +165,6 @@
       </aside>
     </main>
 
-    <script type="module" src="./app.js?v=20260721a"></script>
+    <script type="module" src="./app.js?v=20260529b"></script>
   </body>
 </html>

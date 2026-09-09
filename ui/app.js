@@ -154,11 +154,11 @@ async function checkConnection() {
   }
 }
 
-function renderTimeline(items, total) {
+function renderTimeline(items) {
   timelineList.setAttribute("aria-busy", "false");
   timelineList.innerHTML = "";
   if (!items.length) {
-    timelineList.appendChild(createTimelineEmptyState(total));
+    timelineList.innerHTML = '<li class="item muted">No entries in this page.</li>';
     return;
   }
 
@@ -186,54 +186,6 @@ function renderTimeline(items, total) {
     timelineList.prepend(headerLi);
   }
   wireListKeyboardNav(timelineList);
-}
-
-function createTimelineEmptyState(total) {
-  const li = document.createElement("li");
-  li.className = "item empty-diary";
-  const hasScope = Boolean(state.sourceConversationId || state.sourceSessionId || state.importId || state.truthfulOnly);
-  const hasEntriesOutsideThisPage = Number(total) > 0 || state.offset > 0;
-
-  const heading = document.createElement("h3");
-  heading.textContent = hasScope
-    ? "No entries match this view."
-    : hasEntriesOutsideThisPage
-      ? "There are no more entries on this page."
-      : "Start with the synthetic demo.";
-  li.appendChild(heading);
-
-  const intro = document.createElement("p");
-  if (hasScope) {
-    intro.textContent = "Try clearing the active filters, or import data into this installation before browsing it.";
-    li.appendChild(intro);
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "empty-action";
-    clear.textContent = "Clear filters";
-    clear.addEventListener("click", async () => { await clearScopeState(); });
-    li.appendChild(clear);
-    return li;
-  }
-
-  if (hasEntriesOutsideThisPage) {
-    intro.textContent = "Go back to the previous page, or search for a specific record.";
-    li.appendChild(intro);
-    return li;
-  }
-
-  intro.textContent = "This installation is empty. The repository includes invented examples only; import them locally to explore the full source-record workflow.";
-  li.appendChild(intro);
-
-  const commands = document.createElement("pre");
-  commands.className = "demo-commands";
-  commands.textContent = [
-    "agent-diary import-session-jsonl --path examples/synthetic-session-import.jsonl --import-id demo",
-    "agent-diary produce-conversation-briefs --import-id demo --force",
-    "agent-diary produce-compressed-memory --import-id demo --force",
-    "agent-diary produce-open-loops --import-id demo",
-  ].join("\n");
-  li.appendChild(commands);
-  return li;
 }
 
 function buildTimelineItem(item) {
@@ -322,104 +274,53 @@ function formatMetaDateTime(iso) {
   return `${date.toLocaleString()} · ${iso}`;
 }
 
-function appendMutedLabelValue(parent, label, value) {
-  const row = document.createElement("div");
-  row.className = "muted";
-  const strong = document.createElement("strong");
-  strong.textContent = label + ":";
-  row.appendChild(strong);
-  row.append(" " + String(value ?? ""));
-  parent.appendChild(row);
-  return row;
-}
-
-function attachSupportLinkHandler(button) {
-  button.addEventListener("click", async () => {
-    const id = button.getAttribute("data-support-entry-id");
-    if (!id) return;
-    await loadEntry(id);
-  });
-}
-
-function createSourceEntryLinks(sourceEntryIds) {
-  const wrap = document.createElement("span");
-  wrap.className = "support-links";
-  const ids = Array.isArray(sourceEntryIds) ? sourceEntryIds.filter((id) => String(id || "").trim()) : [];
-  if (!ids.length) {
-    const none = document.createElement("span");
-    none.className = "muted";
-    none.textContent = "none";
-    wrap.appendChild(none);
-    return wrap;
-  }
-  for (const id of ids) {
-    const normalizedId = String(id);
-    const button = document.createElement("button");
-    button.className = "support-link";
-    button.type = "button";
-    button.setAttribute("data-support-entry-id", normalizedId);
-    button.textContent = normalizedId;
-    attachSupportLinkHandler(button);
-    wrap.appendChild(button);
-    wrap.append(" ");
-  }
-  return wrap;
-}
-
-function createOverlayStalenessBlock(artifact) {
+function buildOverlayStalenessHtml(artifact) {
   if (!artifact || artifact.overlay_stale !== true) {
-    return null;
+    return "";
   }
-  const fragment = document.createDocumentFragment();
-  const badge = document.createElement("div");
-  badge.className = "stale-badge";
-  badge.setAttribute("role", "note");
-  badge.setAttribute("aria-label", "Artifact may be stale after overlay");
-  badge.textContent = "May be stale after overlay";
-  fragment.appendChild(badge);
-
   const generatedAt = artifact.artifact_generated_at
     ? formatMetaDateTime(artifact.artifact_generated_at)
     : "unknown";
   const overlayAt = artifact.latest_overlay_at ? formatMetaDateTime(artifact.latest_overlay_at) : "unknown";
-  const generated = document.createElement("div");
-  generated.className = "muted stale-meta";
-  generated.textContent = "artifact generated: " + generatedAt;
-  fragment.appendChild(generated);
-  const overlay = document.createElement("div");
-  overlay.className = "muted stale-meta";
-  overlay.textContent = "latest overlay: " + overlayAt;
-  fragment.appendChild(overlay);
-  return fragment;
+  return `
+    <div class="stale-badge" role="note" aria-label="Artifact may be stale after overlay">
+      May be stale after overlay
+    </div>
+    <div class="muted stale-meta">artifact generated: ${esc(generatedAt)}</div>
+    <div class="muted stale-meta">latest overlay: ${esc(overlayAt)}</div>
+  `;
 }
 
-function createProvenanceBlock(artifact) {
-  const p = artifact?.provenance || {};
-  const block = document.createElement("div");
-  block.className = "provenance-block";
-
-  const badge = document.createElement("div");
-  badge.className = "derived-badge";
-  badge.textContent = "Provenance";
-  block.appendChild(badge);
-
-  if (p.schema_version) appendMutedLabelValue(block, "schema", p.schema_version);
-  if (p.method) appendMutedLabelValue(block, "method", p.method);
-  if (p.method_version) appendMutedLabelValue(block, "method version", p.method_version);
-  if (p.generated_at) appendMutedLabelValue(block, "generated", formatMetaDateTime(p.generated_at));
-  if (p.analysis_window && (p.analysis_window.start || p.analysis_window.end)) {
-    appendMutedLabelValue(block, "window", `${p.analysis_window.start || "?"} → ${p.analysis_window.end || "?"}`);
+function buildSourceEntryLinksHtml(sourceEntryIds) {
+  const ids = Array.isArray(sourceEntryIds) ? sourceEntryIds.filter((id) => String(id || "").trim()) : [];
+  if (!ids.length) {
+    return '<span class="muted">none</span>';
   }
+  return ids
+    .map((id) => `<button class="support-link" type="button" data-support-entry-id="${esc(id)}">${esc(id)}</button>`)
+    .join(" ");
+}
 
-  const sourceRow = document.createElement("div");
-  sourceRow.className = "muted";
-  const label = document.createElement("strong");
-  label.textContent = "source entries:";
-  sourceRow.appendChild(label);
-  sourceRow.append(" ");
-  sourceRow.appendChild(createSourceEntryLinks(p.source_entry_ids));
-  block.appendChild(sourceRow);
-  return block;
+function buildProvenanceHtml(artifact) {
+  const p = artifact?.provenance || {};
+  const rows = [];
+  if (p.schema_version) rows.push(`<div class="muted"><strong>schema:</strong> ${esc(p.schema_version)}</div>`);
+  if (p.method) rows.push(`<div class="muted"><strong>method:</strong> ${esc(p.method)}</div>`);
+  if (p.method_version) rows.push(`<div class="muted"><strong>method version:</strong> ${esc(p.method_version)}</div>`);
+  if (p.generated_at) rows.push(`<div class="muted"><strong>generated:</strong> ${esc(formatMetaDateTime(p.generated_at))}</div>`);
+  if (p.analysis_window && (p.analysis_window.start || p.analysis_window.end)) {
+    rows.push(
+      `<div class="muted"><strong>window:</strong> ${esc(p.analysis_window.start || "?")} → ${esc(p.analysis_window.end || "?")}</div>`
+    );
+  }
+  const sourceIdsHtml = buildSourceEntryLinksHtml(p.source_entry_ids);
+  rows.push(`<div class="muted"><strong>source entries:</strong> <span class="support-links">${sourceIdsHtml}</span></div>`);
+  return `
+    <div class="provenance-block">
+      <div class="derived-badge">Provenance</div>
+      ${rows.join("")}
+    </div>
+  `;
 }
 
 function normalizeSpeakerLabel(label) {
@@ -433,10 +334,10 @@ function speakerTone(label) {
   if (!normalized) {
     return SPEAKER_TONES[0];
   }
-  if (["user", "human", "you", "sampleuser"].includes(normalized)) {
+  if (["user", "human", "you", "bill", "willard", "willardmechem"].includes(normalized)) {
     return SPEAKER_TONES[0];
   }
-  if (["assistant", "agent", "assistant", "codex", "bot"].includes(normalized)) {
+  if (["assistant", "agent", "tom", "codex", "bot"].includes(normalized)) {
     return SPEAKER_TONES[1];
   }
   let hash = 0;
@@ -491,7 +392,7 @@ function renderDialogueBody(raw, turns) {
 
   const note = document.createElement("div");
   note.className = "dialogue-note muted";
-  note.textContent = "Source record view. This stored entry is the evidence; summaries are only helpers.";
+  note.textContent = "Speaker-separated raw entry view. The stored raw content remains the source of truth.";
   transcript.appendChild(note);
 
   const renderedTurns = turns.length ? turns : [{ speaker: raw.speaker || "", body: raw.content || "" }];
@@ -528,7 +429,7 @@ function renderDialogueBody(raw, turns) {
 function renderLoops(loopArtifacts) {
   loopList.innerHTML = "";
   if (!loopArtifacts.length) {
-    loopList.innerHTML = '<li class="item muted">No possible follow-ups have been generated for this entry yet.</li>';
+    loopList.innerHTML = '<li class="item muted">No open-loop analysis for this entry yet.</li>';
     return;
   }
   for (const artifact of loopArtifacts) {
@@ -539,7 +440,7 @@ function renderLoops(loopArtifacts) {
     // Header
     const headDiv = document.createElement("div");
     const headStrong = document.createElement("strong");
-    headStrong.textContent = "Possible follow-ups";
+    headStrong.textContent = artifact.artifact_type || "analysis:open-loop";
     headDiv.appendChild(headStrong);
     li.appendChild(headDiv);
 
@@ -554,16 +455,16 @@ function renderLoops(loopArtifacts) {
     addMeta("producer: " + (artifact.producer || ""));
     addMeta("status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : ""));
 
-    li.appendChild(createProvenanceBlock(artifact));
-    const staleBlock = createOverlayStalenessBlock(artifact);
-    if (staleBlock) li.appendChild(staleBlock);
+    // Build provenance/overlay sections (these use safe esc() internally)
+    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
+    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
 
     const badge = document.createElement("div");
     badge.className = "derived-badge";
-    badge.textContent = "Generated helper";
+    badge.textContent = "Derived Interpretation";
     li.appendChild(badge);
 
-    addMeta("Possible follow-ups: " + loops.length);
+    addMeta("Open loops: " + loops.length);
 
     const ul = document.createElement("ul");
     ul.className = "loop-list";
@@ -718,35 +619,28 @@ function renderWorkTrace(workTraceEvents) {
 }
 
 function renderArtifactStatusBar(briefArtifacts, loopArtifacts, overlays, memoryArtifacts, workTraceEvents) {
-  artifactStatusBar.innerHTML = "";
   const hasStale = [...briefArtifacts, ...loopArtifacts, ...memoryArtifacts].some(
     (artifact) => artifact?.overlay_stale === true
   );
-
-  function appendPill(text, extraClass = "") {
-    const pill = document.createElement("span");
-    pill.className = extraClass ? `status-pill ${extraClass}` : "status-pill";
-    pill.textContent = text;
-    artifactStatusBar.appendChild(pill);
-  }
-
-  appendPill("Summary: " + (briefArtifacts.length ? "✓" : "none"));
+  const pills = [];
+  pills.push('<span class="status-pill">Brief: ' + (briefArtifacts.length ? "✓" : "none") + "</span>");
   if (loopArtifacts.length) {
     const count = loopArtifacts.reduce((sum, artifact) => {
       const loops = Array.isArray(artifact.open_loops) ? artifact.open_loops.length : 0;
       return sum + loops;
     }, 0);
-    appendPill("Follow-ups: " + count);
+    pills.push('<span class="status-pill">Loops: ' + count + "</span>");
   }
   if (overlays.length) {
-    appendPill("Notes: " + overlays.length);
+    pills.push('<span class="status-pill">Overlays: ' + overlays.length + "</span>");
   }
   if (workTraceEvents.length) {
-    appendPill("Work: " + workTraceEvents.length);
+    pills.push('<span class="status-pill">Work: ' + workTraceEvents.length + '</span>');
   }
   if (hasStale) {
-    appendPill("STALE", "status-pill-stale");
+    pills.push('<span class="status-pill status-pill-stale">STALE</span>');
   }
+  artifactStatusBar.innerHTML = pills.join("");
 }
 
 function renderInterpHeader(briefArtifacts, loopArtifacts, memoryArtifacts, workTraceEvents) {
@@ -804,12 +698,12 @@ function renderRecallBanner(hit) {
     clearRecallBanner();
     return;
   }
-  const layer = hit.match_layer === "compressed_memory" ? "generated search memory" : "source record";
+  const layer = hit.match_layer === "compressed_memory" ? "compressed memory" : "direct match";
   recallBanner.hidden = false;
   recallBanner.innerHTML = "";
   const bannerDiv = document.createElement("div");
   const strong = document.createElement("strong");
-  strong.textContent = "Found in " + layer + ": ";
+  strong.textContent = "Found via " + layer + ": ";
   bannerDiv.appendChild(strong);
   bannerDiv.append('"' + (hit.match_text || "") + '"');
   recallBanner.appendChild(bannerDiv);
@@ -838,7 +732,7 @@ function describeRefreshScope(payload) {
   if (payload.source_session_id) parts.push("session=" + payload.source_session_id);
   if (payload.import_id) parts.push("import=" + payload.import_id);
   if (payload.truthful_only) parts.push("truthful-only");
-  return parts.length ? "Scope: " + parts.join(", ") : "Scope: none selected";
+  return parts.length ? "Scope: " + parts.join(", ") : "Scope: none";
 }
 
 async function clearScopeState() {
@@ -889,7 +783,7 @@ function renderDetail(detail) {
     detailBody.textContent = content;
   }
   detailBody.scrollTop = 0;
-  detailStatus.textContent = `Viewing source record ${raw.entry_id}`;
+  detailStatus.textContent = `Viewing ${raw.entry_id}`;
   detailBody.setAttribute("aria-label", `Diary entry ${raw.entry_id}`);
 
   if (briefArtifacts.length) {
@@ -900,19 +794,24 @@ function renderDetail(detail) {
     content.className = "artifact-body";
     content.textContent = currentBrief.content || "";
     briefBody.appendChild(content);
-    briefBody.appendChild(createProvenanceBlock(currentBrief));
-    const staleBlock = createOverlayStalenessBlock(currentBrief);
-    if (staleBlock) briefBody.appendChild(staleBlock);
+    const provenance = document.createElement("div");
+    provenance.innerHTML = buildProvenanceHtml(currentBrief);
+    briefBody.appendChild(provenance);
+    if (currentBrief.overlay_stale === true) {
+      const stale = document.createElement("div");
+      stale.innerHTML = buildOverlayStalenessHtml(currentBrief);
+      briefBody.appendChild(stale);
+    }
     briefDetails.open = true;
   } else {
-    briefBody.textContent = "No plain-language summary is attached to this entry yet.";
+    briefBody.textContent = "No conversation brief is attached to this entry yet.";
     briefDetails.open = false;
   }
 
   memoryArtifactList.innerHTML = "";
   if (!memoryArtifacts.length) {
     memoryArtifactList.innerHTML =
-      '<li class="item muted">No search-memory artifact is attached to this entry yet.</li>';
+      '<li class="item muted">No compressed-memory artifact is attached to this entry yet.</li>';
   }
   for (const artifact of memoryArtifacts) {
     const li = document.createElement("li");
@@ -934,15 +833,21 @@ function renderDetail(detail) {
     prod.textContent = "producer: " + (artifact.producer || "");
     li.appendChild(prod);
 
-    li.appendChild(createProvenanceBlock(artifact));
-    const staleBlock = createOverlayStalenessBlock(artifact);
-    if (staleBlock) li.appendChild(staleBlock);
+    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
+    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
 
     const pre = document.createElement("pre");
     pre.className = "artifact-body";
     pre.textContent = artifact.content || "";
     li.appendChild(pre);
 
+    for (const btn of li.querySelectorAll("button[data-support-entry-id]")) {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-support-entry-id");
+        if (!id) return;
+        await loadEntry(id);
+      });
+    }
     memoryArtifactList.appendChild(li);
   }
   memoryDetails.hidden = memoryArtifacts.length === 0;
@@ -952,7 +857,7 @@ function renderDetail(detail) {
 
   overlayList.innerHTML = "";
   if (!overlays.length) {
-    overlayList.innerHTML = '<li class="item muted">No corrections or annotations yet.</li>';
+    overlayList.innerHTML = '<li class="item muted">No overlays attached.</li>';
   }
   for (const overlay of overlays) {
     const li = document.createElement("li");
@@ -979,7 +884,7 @@ function renderDetail(detail) {
 
   artifactList.innerHTML = "";
   if (!secondaryArtifacts.length) {
-    artifactList.innerHTML = '<li class="item muted">No extra support artifacts attached.</li>';
+    artifactList.innerHTML = '<li class="item muted">No artifacts attached.</li>';
   }
   for (const artifact of secondaryArtifacts) {
     const li = document.createElement("li");
@@ -1005,10 +910,23 @@ function renderDetail(detail) {
     statusDiv.className = "muted";
     statusDiv.textContent = "status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : "");
     li.appendChild(statusDiv);
-    li.appendChild(createProvenanceBlock(artifact));
-    const staleBlock = createOverlayStalenessBlock(artifact);
-    if (staleBlock) li.appendChild(staleBlock);
+    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
+    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    for (const btn of li.querySelectorAll("button[data-support-entry-id]")) {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-support-entry-id");
+        if (!id) return;
+        await loadEntry(id);
+      });
+    }
     artifactList.appendChild(li);
+  }
+  for (const btn of briefBody.querySelectorAll("button[data-support-entry-id]")) {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-support-entry-id");
+      if (!id) return;
+      await loadEntry(id);
+    });
   }
   renderArtifactStatusBar(briefArtifacts, loopArtifacts, overlays, memoryArtifacts, workTraceEvents);
   renderInterpHeader(briefArtifacts, loopArtifacts, memoryArtifacts, workTraceEvents);
@@ -1027,41 +945,24 @@ function renderSearchResults(matches) {
   searchResults.setAttribute("aria-busy", "false");
   searchResults.innerHTML = "";
   if (!matches.length) {
-    searchResults.appendChild(createSearchEmptyState());
+    searchResults.innerHTML = '<li class="item muted">No memory hits for this query.</li>';
     return;
   }
   for (const hit of matches) {
     const isMemory = hit.match_layer === "compressed_memory";
+    const layerBadgeHtml = isMemory
+      ? '<span class="layer-badge layer-badge-memory">via memory</span>'
+      : '<span class="layer-badge layer-badge-raw">direct</span>';
     const li = document.createElement("li");
     li.className = "item";
-
-    const button = document.createElement("button");
-    const entryId = String(hit.entry_id || "");
-    button.setAttribute("data-entry-id", entryId);
-    button.setAttribute("aria-current", state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false");
-    if (state.selectedSearchHitEntryId === hit.entry_id) button.className = "active";
-
-    const badgeWrap = document.createElement("div");
-    const layerBadge = document.createElement("span");
-    layerBadge.className = isMemory ? "layer-badge layer-badge-memory" : "layer-badge layer-badge-raw";
-    layerBadge.textContent = isMemory ? "memory" : "source";
-    badgeWrap.appendChild(layerBadge);
-    button.appendChild(badgeWrap);
-
-    const meta = document.createElement("div");
-    meta.className = "muted";
-    meta.textContent = formatMetaDateTime(hit.indexed_at);
-    if (hit.artifact_id) {
-      meta.append(" · artifact " + String(hit.artifact_id));
-    }
-    button.appendChild(meta);
-
-    const preview = document.createElement("div");
-    preview.className = "preview";
-    preview.textContent = hit.match_text || "";
-    button.appendChild(preview);
-
-    button.addEventListener("click", async () => {
+    li.innerHTML = `
+      <button data-entry-id="${hit.entry_id}" aria-current="${state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false"}" class="${state.selectedSearchHitEntryId === hit.entry_id ? "active" : ""}">
+        <div>${layerBadgeHtml}</div>
+        <div class="muted">${formatMetaDateTime(hit.indexed_at)}${hit.artifact_id ? ` · artifact ${hit.artifact_id}` : ""}</div>
+        <div class="preview">${hit.match_text}</div>
+      </button>
+    `;
+    li.querySelector("button").addEventListener("click", async () => {
       state.selectedSearchHitEntryId = hit.entry_id;
       state.openedFromSearchHit = {
         entry_id: hit.entry_id,
@@ -1071,28 +972,9 @@ function renderSearchResults(matches) {
       persistState();
       await loadEntry(hit.entry_id);
     });
-    li.appendChild(button);
     searchResults.appendChild(li);
   }
   wireListKeyboardNav(searchResults);
-}
-
-function createSearchEmptyState() {
-  const li = document.createElement("li");
-  li.className = "item muted";
-  const hasScope = Boolean(state.sourceConversationId || state.sourceSessionId || state.importId || state.truthfulOnly);
-  li.textContent = hasScope
-    ? "No results in the active scope. Clear filters to search the full diary."
-    : "No results yet. Try another phrase, browse recent entries, or import the synthetic demo shown there.";
-  if (hasScope) {
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "empty-action";
-    clear.textContent = "Clear filters";
-    clear.addEventListener("click", async () => { await clearScopeState(); });
-    li.appendChild(clear);
-  }
-  return li;
 }
 
 function renderImports(items) {
@@ -1106,32 +988,16 @@ function renderImports(items) {
     const li = document.createElement("li");
     li.className = "item";
     const active = state.importId && state.importId === item.import_id;
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("data-import-id", String(item.import_id || ""));
-    btn.setAttribute("aria-current", active ? "true" : "false");
-    if (active) btn.className = "active";
-
-    const title = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = item.import_id || "unknown import";
-    title.appendChild(strong);
-    btn.appendChild(title);
-
-    const meta = document.createElement("div");
-    meta.className = "muted";
-    const metaParts = [formatMetaDateTime(item.imported_at || "")];
-    if (item.source_conversation_id) metaParts.push(String(item.source_conversation_id));
-    if (item.source_session_id) metaParts.push(String(item.source_session_id));
-    meta.textContent = metaParts.join(" · ");
-    btn.appendChild(meta);
-
-    const counts = document.createElement("div");
-    counts.className = "muted";
-    counts.textContent = `imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}`;
-    btn.appendChild(counts);
-
+    const scopedConversation = item.source_conversation_id ? ` · ${item.source_conversation_id}` : "";
+    const scopedSession = item.source_session_id ? ` · ${item.source_session_id}` : "";
+    li.innerHTML = `
+      <button type="button" data-import-id="${item.import_id}" class="${active ? "active" : ""}" aria-current="${active ? "true" : "false"}">
+        <div><strong>${item.import_id}</strong></div>
+        <div class="muted">${formatMetaDateTime(item.imported_at || "")}${scopedConversation}${scopedSession}</div>
+        <div class="muted">imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}</div>
+      </button>
+    `;
+    const btn = li.querySelector("button");
     btn.addEventListener("click", async () => {
       state.importId = String(item.import_id || "").trim();
       if (item.source_conversation_id) {
@@ -1146,11 +1012,11 @@ function renderImports(items) {
       writeUrlState();
       renderScopeBar();
       await loadTimeline();
+      renderImports(items);
       if (state.searchQuery) {
         await runSearch(state.searchQuery);
       }
     });
-    li.appendChild(btn);
     importsList.appendChild(li);
   }
 }
@@ -1189,30 +1055,9 @@ function wireListKeyboardNav(listEl) {
   }
 }
 
-function updateTimelinePagination(result) {
-  const items = result.items || [];
-  const totalNumber = Number(result.total);
-  const hasTotal = Number.isFinite(totalNumber);
-  const start = items.length ? state.offset + 1 : 0;
-  const end = state.offset + items.length;
-  const page = Math.floor(state.offset / state.limit) + 1;
-  const pageCount = hasTotal ? Math.max(1, Math.ceil(totalNumber / state.limit)) : null;
-
-  prevPageBtn.disabled = state.offset <= 0;
-  nextPageBtn.disabled = hasTotal ? end >= totalNumber : items.length < state.limit;
-  prevPageBtn.title = prevPageBtn.disabled ? "Already at the newest entries" : `Show entries ${Math.max(1, state.offset - state.limit + 1)}–${state.offset}`;
-  nextPageBtn.title = nextPageBtn.disabled ? "Already at the oldest entries" : `Show entries ${end + 1}–${end + state.limit}`;
-
-  const totalLabel = hasTotal ? ` of ${totalNumber}` : "";
-  const pageLabel = pageCount ? `page ${page}/${pageCount}` : `page ${page}`;
-  return `Showing entries ${start}–${end}${totalLabel} (${pageLabel})`;
-}
-
 async function loadTimeline() {
   timelineStatus.textContent = "Loading entries...";
   timelineList.setAttribute("aria-busy", "true");
-  prevPageBtn.disabled = true;
-  nextPageBtn.disabled = true;
   try {
     const filters = {};
     if (state.sourceConversationId) filters.source_conversation_id = state.sourceConversationId;
@@ -1224,18 +1069,16 @@ async function loadTimeline() {
       offset: state.offset,
       filters,
     });
-    renderTimeline(result.items || [], result.total);
+    renderTimeline(result.items || []);
     const scopeParts = [];
     if (state.sourceConversationId) scopeParts.push(`conversation=${state.sourceConversationId}`);
     if (state.importId) scopeParts.push(`import=${state.importId}`);
     if (state.truthfulOnly) scopeParts.push("truthful-only");
     const scopeLabel = scopeParts.length ? ` · scope ${scopeParts.join(", ")}` : "";
-    timelineStatus.textContent = `${updateTimelinePagination(result)}${scopeLabel}`;
+    timelineStatus.textContent = `Showing ${result.items.length} of ${result.total ?? "?"} entries · offset ${state.offset}${scopeLabel}`;
   } catch (err) {
     showError(timelineList, `Timeline error: ${err.message}`);
     timelineStatus.textContent = "Could not load entries.";
-    prevPageBtn.disabled = state.offset <= 0;
-    nextPageBtn.disabled = false;
   }
 }
 
@@ -1289,7 +1132,7 @@ async function submitOverlay() {
   const author = overlayAuthorInput.value.trim();
   const content = overlayContentInput.value.trim();
   if (!overlayType || !author || !content) {
-    overlayStatus.textContent = "Type, author, and note are required.";
+    overlayStatus.textContent = "Type, author, and content are required.";
     return;
   }
   overlayStatus.textContent = "Saving overlay...";
@@ -1301,10 +1144,10 @@ async function submitOverlay() {
       content,
     });
     overlayContentInput.value = "";
-    overlayStatus.textContent = "Note saved.";
+    overlayStatus.textContent = "Overlay added.";
     await loadEntry(state.selectedEntryId);
   } catch (err) {
-    overlayStatus.textContent = `Note save failed: ${err.message}`;
+    overlayStatus.textContent = `Overlay save failed: ${err.message}`;
   }
 }
 
@@ -1332,22 +1175,22 @@ function setRefreshDerivedButtonsDisabled(disabled) {
 
 function summarizeProducerResult(endpoint, result) {
   if (endpoint === "/produce_open_loops") {
-    return `Follow-ups refreshed. loops=${result.loop_count || 0} source_entries=${(result.source_entry_ids || []).length}`;
+    return `Open loops refreshed. loops=${result.loop_count || 0} source_entries=${(result.source_entry_ids || []).length}`;
   }
   if (endpoint === "/produce_conversation_briefs") {
-    return `Summaries refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
+    return `Conversation briefs refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
   }
   if (endpoint === "/produce_compressed_memory") {
-    return `Search memory refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
+    return `Compressed memory refreshed. produced=${result.produced_count || 0} skipped=${result.skipped_count || 0}`;
   }
-  return "Generated helper refreshed.";
+  return "Derived layer refreshed.";
 }
 
 async function refreshDerived(endpoint) {
   const payload = producerPayloadFromCurrentContext();
   refreshDerivedScope.textContent = describeRefreshScope(payload);
   if (!payload.entry_ids && !payload.source_conversation_id && !payload.source_session_id && !payload.import_id && !payload.truthful_only) {
-    refreshDerivedStatus.textContent = "Select an entry or apply an advanced filter first.";
+    refreshDerivedStatus.textContent = "Select an entry or apply a scope first.";
     return;
   }
   const label =
@@ -1355,7 +1198,7 @@ async function refreshDerived(endpoint) {
       ? "open loops"
       : endpoint === "/produce_conversation_briefs"
         ? "conversation briefs"
-        : "search memory";
+        : "compressed memory";
   refreshDerivedStatus.textContent = `Refreshing ${label}...`;
   setRefreshDerivedButtonsDisabled(true);
   try {
@@ -1376,7 +1219,7 @@ async function refreshDerived(endpoint) {
 }
 
 async function runSearch(query) {
-  searchStatus.textContent = "Searching diary...";
+  searchStatus.textContent = "Searching memory layers...";
   searchResults.setAttribute("aria-busy", "true");
   try {
     const filters = {};
@@ -1390,15 +1233,10 @@ async function runSearch(query) {
     writeUrlState();
     renderSearchResults(result.matches || []);
     const summary = result.match_summary || {};
-    const count = (result.matches || []).length;
-    if (summary.date_filter) {
-      searchStatus.textContent = `Found ${count} source record${count === 1 ? "" : "s"} from ${summary.date_filter}.`;
-    } else if (summary.using_raw_layer && summary.compressed_memory_hits > 0) {
-      searchStatus.textContent = `Found ${count} source/memory-backed hit${count === 1 ? "" : "s"}.`;
-    } else if (summary.using_raw_layer) {
-      searchStatus.textContent = `Found ${count} source record hit${count === 1 ? "" : "s"}.`;
+    if (summary.using_fallback) {
+      searchStatus.textContent = `Found ${(result.matches || []).length} raw-entry fallback hits. Compressed-memory hits: 0.`;
     } else {
-      searchStatus.textContent = `Found ${count} generated memory hit${count === 1 ? "" : "s"}.`;
+      searchStatus.textContent = `Found ${(result.matches || []).length} compressed-memory hits.`;
     }
   } catch (err) {
     showError(searchResults, `Search error: ${err.message}`);
@@ -1607,13 +1445,13 @@ async function init() {
   if (state.searchQuery) {
     await runSearch(state.searchQuery);
   } else {
-    searchStatus.textContent = "Search looks across generated memory first, then falls back to raw source entries.";
+    searchStatus.textContent = "Search prefers compressed memory and falls back to raw entries when needed.";
   }
   if (state.selectedEntryId) {
     await loadEntry(state.selectedEntryId);
   } else {
     detailMeta.innerHTML = "";
-    detailStatus.textContent = "Search or choose a recent entry.";
+    detailStatus.textContent = "Select an entry from timeline or search.";
     interpHeader.textContent = "";
     artifactStatusBar.innerHTML = "";
     loopList.innerHTML = "";
@@ -1628,7 +1466,7 @@ async function init() {
     refreshDerivedStatus.textContent = "";
     clearRecallBanner();
     clearDetailBody();
-    detailBody.textContent = "Search or choose a recent entry to read the source record.";
+    detailBody.textContent = "Select an entry to view raw detail.";
   }
   writeUrlState();
 }
@@ -1672,15 +1510,15 @@ window.addEventListener("popstate", async () => {
     await runSearch(state.searchQuery);
   } else {
     searchResults.innerHTML = "";
-    searchStatus.textContent = "Search looks across generated memory first, then falls back to raw source entries.";
+    searchStatus.textContent = "Search prefers compressed memory and falls back to raw entries when needed.";
   }
   if (state.selectedEntryId) {
     await loadEntry(state.selectedEntryId);
   } else {
     detailMeta.innerHTML = "";
     clearDetailBody();
-    detailBody.textContent = "Search or choose a recent entry to read the source record.";
-    detailStatus.textContent = "Search or choose a recent entry.";
+    detailBody.textContent = "Select an entry to view raw detail.";
+    detailStatus.textContent = "Select an entry from timeline or search.";
     interpHeader.textContent = "";
     artifactStatusBar.innerHTML = "";
     loopList.innerHTML = "";
@@ -1712,5 +1550,374 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (panel) panel.classList.add("active");
   });
 });
+
+// ── Knowledge Graph UI ───────────────────────────────────────────
+
+const graphToggleBtn = document.getElementById("graphToggleBtn");
+const graphView = document.getElementById("graphView");
+let graphMode = false;
+
+function getEntityName(fact, side) {
+  return fact[side] || `entity:${side}`;
+}
+
+function renderFactLine(fact, onOpen) {
+  const li = document.createElement("li");
+  const pred = document.createElement("span");
+  pred.className = "predicate";
+  pred.textContent = fact.predicate || "";
+  li.appendChild(pred);
+  li.appendChild(document.createTextNode(" → "));
+  const obj = document.createElement("span");
+  obj.className = "object";
+  obj.textContent = fact.object_value || fact.object_name || fact.object_entity_id || "(value)";
+  li.appendChild(obj);
+  const meta = document.createElement("div");
+  meta.className = "meta-row";
+  const stateLabel = fact.state || "current";
+  const validFrom = fact.valid_from ? new Date(fact.valid_from).toLocaleDateString() : "";
+  meta.textContent = `[${stateLabel}]${validFrom ? ` · since ${validFrom}` : ""}`;
+  li.appendChild(meta);
+  if (onOpen) {
+    li.style.cursor = "pointer";
+    li.title = "Click to inspect fact";
+    li.addEventListener("click", () => onOpen(fact));
+  }
+  return li;
+}
+
+async function renderGraphLanding() {
+  graphView.innerHTML = "";
+  const status = document.createElement("p");
+  status.className = "graph-status";
+  status.textContent = "Search the knowledge graph for people, devices, projects, or services.";
+  graphView.appendChild(status);
+
+  const form = document.createElement("form");
+  form.className = "graph-search-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Search entities... (e.g. Lucy, Pi-hole, Art)";
+  input.autocomplete = "off";
+  const btn = document.createElement("button");
+  btn.type = "submit";
+  btn.className = "graph-btn";
+  btn.textContent = "Search";
+  form.appendChild(input);
+  form.appendChild(btn);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    await renderGraphSearch(q);
+  });
+  graphView.appendChild(form);
+
+  // First-run status
+  try {
+    const bs = await post("/graph/backfill_status", {});
+    const total = bs.total_entries || 0;
+    const q = bs.queue || {};
+    const processed = (q.succeeded || 0) + (q.no_facts || 0);
+    const statusLine = document.createElement("p");
+    statusLine.className = "graph-status";
+    if (processed === 0 && total > 0) {
+      statusLine.innerHTML = `Graph not built yet. ${esc(total)} diary entries available. Run <code>agent-diary graph-backfill</code> on the server to process history, or add facts manually below.`;
+    } else if (total > 0) {
+      statusLine.textContent = `${processed}/${total} entries processed. ${q.pending || 0} queued.`;
+    }
+    graphView.appendChild(statusLine);
+  } catch {
+    // server may be older; ignore
+  }
+
+  // Manual fact add form
+  const addForm = document.createElement("div");
+  addForm.className = "graph-add-form";
+  addForm.innerHTML = `
+    <strong style="grid-column:1/-1;font-size:0.85rem;">Add a fact (manual assertion)</strong>
+    <input id="gafSubject" placeholder="Subject (name)" />
+    <select id="gafPredicate">
+      <option value="RUNS_ON">RUNS_ON</option>
+      <option value="OWNS">OWNS</option>
+      <option value="USES">USES</option>
+      <option value="CONNECTED_TO">CONNECTED_TO</option>
+      <option value="MEMBER_OF">MEMBER_OF</option>
+      <option value="WORKS_ON">WORKS_ON</option>
+      <option value="LOCATED_IN">LOCATED_IN</option>
+      <option value="HAS_RAM">HAS_RAM</option>
+      <option value="HAS_IP_ADDRESS">HAS_IP_ADDRESS</option>
+      <option value="HAS_OS">HAS_OS</option>
+    </select>
+    <input id="gafObject" placeholder="Object (name or value)" />
+    <input id="gafReason" placeholder="Reason (optional)" />
+    <button class="graph-btn" id="gafSubmit" type="button">Add Fact</button>
+  `;
+  graphView.appendChild(addForm);
+  document.getElementById("gafSubmit").addEventListener("click", async () => {
+    const subject = document.getElementById("gafSubject").value.trim();
+    const predicate = document.getElementById("gafPredicate").value;
+    const object = document.getElementById("gafObject").value.trim();
+    const reason = document.getElementById("gafReason").value.trim();
+    if (!subject || !object) {
+      alert("Subject and object are required.");
+      return;
+    }
+    try {
+      const body = {
+        subject_id: subject,
+        predicate,
+        object_kind: "entity",
+        object_entity_id: object,
+        reason,
+      };
+      // If the object looks like a value (IP, number), treat as value fact
+      if (/^[\d.]+$/.test(object)) {
+        body.object_kind = "value";
+        delete body.object_entity_id;
+        body.object_value = object;
+        body.object_value_type = "text";
+      }
+      const result = await post("/graph/add_fact", body);
+      alert(`Fact added: ${predicate} (${result.fact_id})`);
+      await renderGraphLanding();
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    }
+  });
+}
+
+async function renderGraphSearch(query) {
+  graphView.innerHTML = "";
+  const back = document.createElement("span");
+  back.className = "graph-back-link";
+  back.textContent = "← Back to graph home";
+  back.addEventListener("click", renderGraphLanding);
+  graphView.appendChild(back);
+
+  const status = document.createElement("p");
+  status.className = "graph-status";
+  status.textContent = `Searching for "${query}"...`;
+  graphView.appendChild(status);
+
+  try {
+    const result = await post("/graph/search", { query, states: ["current"] });
+    status.textContent = `${result.entity_count || 0} entities, ${result.fact_count || 0} facts.`;
+    const entities = result.entities || [];
+    for (const ent of entities) {
+      const card = document.createElement("div");
+      card.className = "entity-card";
+      const h3 = document.createElement("h3");
+      h3.textContent = ent.canonical_name;
+      const badge = document.createElement("span");
+      badge.className = "entity-type-badge";
+      badge.textContent = ent.entity_type || "other";
+      h3.appendChild(badge);
+      card.appendChild(h3);
+      const meta = document.createElement("div");
+      meta.className = "entity-meta";
+      meta.textContent = ent.entity_id;
+      card.appendChild(meta);
+      const viewBtn = document.createElement("button");
+      viewBtn.className = "graph-btn";
+      viewBtn.textContent = "Open entity";
+      viewBtn.addEventListener("click", () => renderEntityPage(ent.entity_id));
+      card.appendChild(viewBtn);
+      graphView.appendChild(card);
+    }
+    const facts = result.facts || [];
+    if (facts.length) {
+      const hs = document.createElement("h4");
+      hs.textContent = "Facts";
+      graphView.appendChild(hs);
+      const ul = document.createElement("ul");
+      ul.className = "fact-list";
+      for (const fact of facts) {
+        ul.appendChild(renderFactLine(fact, (f) => showFactDetail(f.fact_id)));
+      }
+      graphView.appendChild(ul);
+    }
+    if (!entities.length && !facts.length) {
+      status.textContent = `No graph results for "${query}". Try a different name, or add a fact.`;
+    }
+  } catch (err) {
+    status.textContent = `Search failed: ${err.message}`;
+  }
+}
+
+async function renderEntityPage(entityId) {
+  graphView.innerHTML = "";
+  const back = document.createElement("span");
+  back.className = "graph-back-link";
+  back.textContent = "← Back to graph";
+  back.addEventListener("click", renderGraphLanding);
+  graphView.appendChild(back);
+
+  try {
+    const detail = await post("/graph/get_entity", { entity_id: entityId, include_history: true });
+    const entity = detail.entity;
+    const card = document.createElement("div");
+    card.className = "entity-card";
+    const h3 = document.createElement("h3");
+    h3.textContent = entity.canonical_name;
+    const badge = document.createElement("span");
+    badge.className = "entity-type-badge";
+    badge.textContent = entity.entity_type || "other";
+    h3.appendChild(badge);
+    card.appendChild(h3);
+    const meta = document.createElement("div");
+    meta.className = "entity-meta";
+    meta.textContent = entity.entity_id + (entity.lifecycle_status !== "active" ? ` (${entity.lifecycle_status})` : "");
+    card.appendChild(meta);
+
+    // Aliases
+    if (detail.aliases && detail.aliases.length) {
+      const al = document.createElement("ul");
+      al.className = "alias-list";
+      detail.aliases.forEach((a) => {
+        const li = document.createElement("li");
+        li.textContent = a.alias;
+        al.appendChild(li);
+      });
+      card.appendChild(al);
+    }
+
+    // Current facts
+    const factsHeader = document.createElement("h4");
+    factsHeader.textContent = "Current Facts";
+    card.appendChild(factsHeader);
+    const ul = document.createElement("ul");
+    ul.className = "fact-list";
+    const currentFacts = detail.current_facts || [];
+    if (!currentFacts.length) {
+      const li = document.createElement("li");
+      li.textContent = "No current facts.";
+      ul.appendChild(li);
+    }
+    for (const fact of currentFacts) {
+      ul.appendChild(renderFactLine(fact, (f) => showFactDetail(f.fact_id)));
+    }
+    card.appendChild(ul);
+
+    // History
+    if (detail.all_facts && detail.all_facts.length > currentFacts.length) {
+      const histHeader = document.createElement("h4");
+      histHeader.textContent = "History";
+      card.appendChild(histHeader);
+      const histUl = document.createElement("ul");
+      histUl.className = "fact-list";
+      const histFacts = detail.all_facts.filter((f) => f.state !== "current");
+      for (const fact of histFacts) {
+        histUl.appendChild(renderFactLine(fact, (f) => showFactDetail(f.fact_id)));
+      }
+      card.appendChild(histUl);
+    }
+
+    graphView.appendChild(card);
+  } catch (err) {
+    const status = document.createElement("p");
+    status.className = "graph-status";
+    status.textContent = `Entity load failed: ${err.message}`;
+    graphView.appendChild(status);
+  }
+}
+
+async function showFactDetail(factId) {
+  graphView.innerHTML = "";
+  const back = document.createElement("span");
+  back.className = "graph-back-link";
+  back.textContent = "← Back to graph";
+  back.addEventListener("click", renderGraphLanding);
+  graphView.appendChild(back);
+
+  try {
+    const detail = await post("/graph/explain_fact", { fact_id: factId });
+    const fact = detail.fact;
+    const card = document.createElement("div");
+    card.className = "fact-detail-card";
+    const h3 = document.createElement("h3");
+    h3.textContent = `${fact.subject_entity_id} ${fact.predicate} ${fact.object_value || fact.object_entity_id || ""}`;
+    card.appendChild(h3);
+    const meta = document.createElement("div");
+    meta.className = "entity-meta";
+    meta.textContent = `state: ${fact.state || "current"}`;
+    if (fact.valid_from) meta.textContent += ` · since ${new Date(fact.valid_from).toLocaleString()}`;
+    if (fact.valid_to) meta.textContent += ` · until ${new Date(fact.valid_to).toLocaleString()}`;
+    card.appendChild(meta);
+
+    const evHeader = document.createElement("h4");
+    evHeader.textContent = `Evidence (${detail.evidence_count || 0})`;
+    card.appendChild(evHeader);
+    const evUl = document.createElement("ul");
+    evUl.className = "evidence-list";
+    const evidence = detail.evidence || [];
+    if (!evidence.length) {
+      const li = document.createElement("li");
+      li.textContent = "No linked evidence.";
+      evUl.appendChild(li);
+    }
+    for (const ev of evidence) {
+      const li = document.createElement("li");
+      li.textContent = `${ev.source_kind} · ${ev.source_id} · ${ev.role}${ev.extractor_method ? ` · ${ev.extractor_method}` : ""}`;
+      evUl.appendChild(li);
+    }
+    card.appendChild(evUl);
+
+    // Correction button
+    const corrBtn = document.createElement("button");
+    corrBtn.className = "graph-btn";
+    corrBtn.textContent = "Correct this fact";
+    corrBtn.style.marginTop = "10px";
+    corrBtn.addEventListener("click", () => {
+      const newVal = prompt("New object value (name or value):");
+      if (!newVal) return;
+      const reason = prompt("Reason for correction:");
+      if (!reason) return;
+      post("/graph/correct_fact", { fact_id: factId, correction: newVal, reason })
+        .then(() => {
+          alert("Fact corrected");
+          showFactDetail(factId);
+        })
+        .catch((err) => alert(`Failed: ${err.message}`));
+    });
+    card.appendChild(corrBtn);
+
+    graphView.appendChild(card);
+  } catch (err) {
+    const status = document.createElement("p");
+    status.className = "graph-status";
+    status.textContent = `Fact load failed: ${err.message}`;
+    graphView.appendChild(status);
+  }
+}
+
+function toggleGraphMode(force) {
+  graphMode = typeof force === "boolean" ? force : !graphMode;
+  if (graphMode) {
+    graphView.hidden = false;
+    detailBody.hidden = true;
+    detailMeta.hidden = true;
+    graphToggleBtn.classList.add("active");
+    graphToggleBtn.textContent = "Diary";
+    renderGraphLanding();
+  } else {
+    graphView.hidden = true;
+    detailBody.hidden = false;
+    detailMeta.hidden = false;
+    graphToggleBtn.classList.remove("active");
+    graphToggleBtn.textContent = "Graph";
+    if (state.selectedEntryId) {
+      loadEntry(state.selectedEntryId);
+    } else {
+      detailBody.textContent = "Select an entry to view raw detail.";
+    }
+  }
+}
+
+graphToggleBtn.addEventListener("click", () => toggleGraphMode());
+const hasGraphToggle = !!document.getElementById("graphToggleBtn");
+if (!hasGraphToggle) {
+  // fallback: no button means Graph mode unavailable
+}
 
 init();

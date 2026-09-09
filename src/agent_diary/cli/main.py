@@ -19,8 +19,6 @@ from agent_diary.cli.openclaw_work_trace_import import (
 from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_session_export, build_openclaw_telegram_direct_transcript
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
-from agent_diary.service.doctor import run_doctor
-from agent_diary.storage.archiver import ArchiveConfig, archive_stale_entries, archive_report
 from agent_diary.service.handlers import (
     append_entry,
     append_overlay,
@@ -42,6 +40,24 @@ from agent_diary.service.handlers import (
     search_all,
     search_memory,
     search_work_trace,
+    graph_add_fact,
+    graph_backfill,
+    graph_backfill_status,
+    graph_claim_jobs,
+    graph_correct_fact,
+    graph_enqueue_recent,
+    graph_explain_fact,
+    graph_fail_extraction,
+    graph_fetch_source,
+    graph_find_entity,
+    graph_get_entity,
+    graph_get_subgraph,
+    graph_merge_alias,
+    graph_neighbors,
+    graph_queue_status,
+    graph_search,
+    graph_split_entity,
+    graph_submit_extraction,
 )
 from agent_diary.service.http_server import run_server
 from agent_diary.storage.files import ensure_data_dirs
@@ -278,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="import many OpenClaw session files discovered from trajectory metadata for one session key",
         description="Find session files for a specific OpenClaw session key under the trajectory store, then import them through the truthful recurring-ingestion path as a controlled backfill.",
     )
-    p_backfill.add_argument("--session-key", required=True, help="OpenClaw session key to backfill, for example agent:main:telegram:default:direct:123456789")
+    p_backfill.add_argument("--session-key", required=True, help="OpenClaw session key to backfill, for example agent:main:telegram:default:direct:713733361")
     p_backfill.add_argument("--trajectories-root", default="~/.openclaw/agents/main/sessions", help="directory containing *.trajectory.jsonl files")
     p_backfill.add_argument("--source", default="openclaw-session-backfill", help="source label stored on imported raw entries")
     p_backfill.add_argument("--since", help="inclusive lower bound for trajectory start time; accepts YYYY-MM-DD or ISO timestamp")
@@ -368,23 +384,92 @@ def build_parser() -> argparse.ArgumentParser:
     p_build_telegram_direct.add_argument("--source-session-id", help="override the canonical source session id")
     p_build_telegram_direct.add_argument("--source-conversation-id", help="override the canonical source conversation id")
 
-    p_doctor = sub.add_parser("doctor", help="run read-only backend consistency checks")
-    p_doctor.add_argument("--max-issues", type=int, default=100)
-
-    p_archive = sub.add_parser(
-        "archive",
-        help="pack old entry months into compressed archives",
-        description="Find calendar-month directories that exceed configured thresholds and pack them into single tar.gz archives. Archived entries remain transparently accessible through the API and reader.",
-    )
-    p_archive.add_argument("--dry-run", action="store_true", help="report what would be archived without making changes")
-    p_archive.add_argument("--report", action="store_true", help="show existing archives and candidate months")
-    p_archive.add_argument("--after-days", type=int, default=60, help="minimum age of the newest file in a month before archiving (default: 60)")
-    p_archive.add_argument("--max-bytes", type=int, default=10 * 1024 * 1024, help="max total bytes in a month before archiving (default: 10MB)")
-    p_archive.add_argument("--max-files", type=int, default=500, help="max file count in a month before archiving (default: 500)")
-
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8041)
+
+    # ── Knowledge Graph subcommands ─────────────────────────────────
+
+    p_gfe = sub.add_parser("graph-find-entity")
+    p_gfe.add_argument("--query", required=True)
+    p_gfe.add_argument("--entity-type")
+
+    p_gge = sub.add_parser("graph-get-entity")
+    p_gge.add_argument("--entity-id", required=True)
+    p_gge.add_argument("--include-history", action="store_true")
+
+    p_gn = sub.add_parser("graph-neighbors")
+    p_gn.add_argument("--entity-id", required=True)
+    p_gn.add_argument("--depth", type=int, default=1)
+    p_gn.add_argument("--states", default="current")
+
+    p_gs = sub.add_parser("graph-search")
+    p_gs.add_argument("--query", required=True)
+    p_gs.add_argument("--states", default="current")
+
+    p_gef = sub.add_parser("graph-explain-fact")
+    p_gef.add_argument("--fact-id", required=True)
+
+    p_ggs = sub.add_parser("graph-get-subgraph")
+    p_ggs.add_argument("--entity-id", required=True)
+    p_ggs.add_argument("--depth", type=int, default=1)
+    p_ggs.add_argument("--max-nodes", type=int, default=50)
+    p_ggs.add_argument("--states", default="current")
+
+    p_gaf = sub.add_parser("graph-add-fact")
+    p_gaf.add_argument("--subject-id", required=True)
+    p_gaf.add_argument("--predicate", required=True)
+    p_gaf.add_argument("--object-kind", required=True, choices=["entity", "value"])
+    p_gaf.add_argument("--object-entity-id")
+    p_gaf.add_argument("--object-value")
+    p_gaf.add_argument("--object-value-type", default="text")
+    p_gaf.add_argument("--source-kind", default="user_assertion")
+    p_gaf.add_argument("--source-id", default="manual")
+    p_gaf.add_argument("--author", default="user")
+    p_gaf.add_argument("--reason")
+
+    p_gcf = sub.add_parser("graph-correct-fact")
+    p_gcf.add_argument("--fact-id", required=True)
+    p_gcf.add_argument("--correction", required=True)
+    p_gcf.add_argument("--reason", required=True)
+
+    p_gma = sub.add_parser("graph-merge-alias")
+    p_gma.add_argument("--entity-id", required=True)
+    p_gma.add_argument("--alias", required=True)
+    p_gma.add_argument("--source-kind", default="user_assertion")
+    p_gma.add_argument("--source-id", default="manual")
+
+    p_gse = sub.add_parser("graph-split-entity")
+    p_gse.add_argument("--entity-id", required=True)
+    p_gse.add_argument("--reason")
+
+    p_gcj = sub.add_parser("graph-claim-jobs")
+    p_gcj.add_argument("--limit", type=int, default=10)
+    p_gcj.add_argument("--worker-id", default="hermes")
+    p_gcj.add_argument("--lease-seconds", type=int, default=300)
+
+    p_gfs = sub.add_parser("graph-fetch-source")
+    p_gfs.add_argument("--job-id", required=True)
+
+    p_gse2 = sub.add_parser("graph-submit-extraction")
+    p_gse2.add_argument("--job-id", required=True)
+    p_gse2.add_argument("--result-json", required=True)
+
+    p_gfe2 = sub.add_parser("graph-fail-extraction")
+    p_gfe2.add_argument("--job-id", required=True)
+    p_gfe2.add_argument("--error", required=True)
+    p_gfe2.add_argument("--no-retry", action="store_true")
+
+    sub.add_parser("graph-queue-status")
+
+    p_gb = sub.add_parser("graph-backfill")
+    p_gb.add_argument("--batch-size", type=int, default=100)
+    p_gb.add_argument("--dry-run", action="store_true")
+
+    sub.add_parser("graph-backfill-status")
+
+    p_ger = sub.add_parser("graph-enqueue-recent")
+    p_ger.add_argument("--limit", type=int, default=50)
 
     return parser
 
@@ -877,23 +962,132 @@ def main() -> None:
         _print(out, args.json)
         return
 
-    if args.command == "archive":
-        if args.report:
-            out = archive_report(paths)
-        else:
-            cfg = ArchiveConfig(
-                after_days=args.after_days,
-                max_bytes=args.max_bytes,
-                max_files=args.max_files,
-                dry_run=args.dry_run,
-            )
-            out = {"ok": True, "results": archive_stale_entries(paths, cfg)}
-        _print(out, args.json)
+    if args.command == "graph-find-entity":
+        payload = {"query": args.query}
+        if getattr(args, "entity_type", None):
+            payload["entity_type"] = args.entity_type
+        _print(graph_find_entity(paths, payload), args.json)
         return
 
-    if args.command == "doctor":
-        out = run_doctor(paths, max_issues=args.max_issues)
-        _print(out, args.json)
+    if args.command == "graph-get-entity":
+        payload = {"entity_id": args.entity_id, "include_history": args.include_history}
+        _print(graph_get_entity(paths, payload), args.json)
+        return
+
+    if args.command == "graph-neighbors":
+        payload = {
+            "entity_id": args.entity_id,
+            "depth": args.depth,
+            "states": [s.strip() for s in args.states.split(",")],
+        }
+        _print(graph_neighbors(paths, payload), args.json)
+        return
+
+    if args.command == "graph-search":
+        payload = {"query": args.query, "states": [s.strip() for s in args.states.split(",")]}
+        _print(graph_search(paths, payload), args.json)
+        return
+
+    if args.command == "graph-explain-fact":
+        _print(graph_explain_fact(paths, {"fact_id": args.fact_id}), args.json)
+        return
+
+    if args.command == "graph-get-subgraph":
+        payload = {
+            "entity_id": args.entity_id,
+            "depth": args.depth,
+            "max_nodes": args.max_nodes,
+            "states": [s.strip() for s in args.states.split(",")],
+        }
+        _print(graph_get_subgraph(paths, payload), args.json)
+        return
+
+    if args.command == "graph-add-fact":
+        payload = {
+            "subject_id": args.subject_id,
+            "predicate": args.predicate,
+            "object_kind": args.object_kind,
+            "source_kind": args.source_kind,
+            "source_id": args.source_id,
+            "author": args.author,
+        }
+        if args.object_kind == "entity":
+            payload["object_entity_id"] = args.object_entity_id
+        else:
+            payload["object_value"] = args.object_value
+            payload["object_value_type"] = args.object_value_type
+        if args.reason:
+            payload["reason"] = args.reason
+        _print(graph_add_fact(paths, payload), args.json)
+        return
+
+    if args.command == "graph-correct-fact":
+        _print(graph_correct_fact(paths, {
+            "fact_id": args.fact_id,
+            "correction": args.correction,
+            "reason": args.reason,
+        }), args.json)
+        return
+
+    if args.command == "graph-merge-alias":
+        _print(graph_merge_alias(paths, {
+            "entity_id": args.entity_id,
+            "alias": args.alias,
+            "source_kind": args.source_kind,
+            "source_id": args.source_id,
+        }), args.json)
+        return
+
+    if args.command == "graph-split-entity":
+        payload = {"entity_id": args.entity_id}
+        if args.reason:
+            payload["reason"] = args.reason
+        _print(graph_split_entity(paths, payload), args.json)
+        return
+
+    if args.command == "graph-claim-jobs":
+        _print(graph_claim_jobs(paths, {
+            "limit": args.limit,
+            "worker_id": args.worker_id,
+            "lease_seconds": args.lease_seconds,
+        }), args.json)
+        return
+
+    if args.command == "graph-fetch-source":
+        _print(graph_fetch_source(paths, {"job_id": args.job_id}), args.json)
+        return
+
+    if args.command == "graph-submit-extraction":
+        import json as _json
+        result = _json.loads(args.result_json)
+        _print(graph_submit_extraction(paths, {"job_id": args.job_id, "result": result}), args.json)
+        return
+
+    if args.command == "graph-fail-extraction":
+        _print(graph_fail_extraction(paths, {
+            "job_id": args.job_id,
+            "error": args.error,
+            "retryable": not args.no_retry,
+        }), args.json)
+        return
+
+    if args.command == "graph-queue-status":
+        _print(graph_queue_status(paths, {}), args.json)
+        return
+
+    if args.command == "graph-backfill":
+        _print(graph_backfill(paths, {
+            "batch_size": args.batch_size,
+            "dry_run": args.dry_run,
+        }), args.json)
+        return
+
+    if args.command == "graph-backfill-status":
+        _print(graph_backfill_status(paths, {}), args.json)
+        return
+
+    if args.command == "graph-enqueue-recent":
+        _print(graph_enqueue_recent(paths, {"limit": args.limit}), args.json)
         return
 
     if args.command == "serve":

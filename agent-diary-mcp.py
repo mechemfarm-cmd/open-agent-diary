@@ -161,6 +161,91 @@ def health() -> str:
         return json.dumps({"status": "unhealthy", "error": str(e)})
 
 
+def _graph_post(path: str, body: dict) -> str:
+    """Call a /graph/* endpoint and return the result JSON."""
+    result = _diary_post(path, body)
+    if not result or not result.get("ok"):
+        return json.dumps({"error": "Graph query failed", "detail": result})
+    return json.dumps(result.get("result", {}))
+
+
+def graph_find_entity(query: str, limit: int = 5) -> str:
+    """Search for entities by name or alias."""
+    return _graph_post("/graph/find_entity", {"query": query, "limit": limit})
+
+
+def graph_get_entity(entity_id: str, include_history: bool = False) -> str:
+    """Get entity details with current facts and aliases."""
+    return _graph_post("/graph/get_entity", {"entity_id": entity_id, "include_history": include_history})
+
+
+def graph_neighbors(entity_id: str, states: str = "current", depth: int = 1) -> str:
+    """Get neighboring entities and facts around an entity."""
+    return _graph_post("/graph/neighbors", {
+        "entity_id": entity_id,
+        "states": [s.strip() for s in states.split(",")],
+        "depth": depth,
+    })
+
+
+def graph_search(query: str, states: str = "current") -> str:
+    """Search across entities and facts."""
+    return _graph_post("/graph/search", {
+        "query": query,
+        "states": [s.strip() for s in states.split(",")],
+    })
+
+
+def graph_explain_fact(fact_id: str) -> str:
+    """Get full details of a fact including all evidence."""
+    return _graph_post("/graph/explain_fact", {"fact_id": fact_id})
+
+
+def graph_get_subgraph(entity_id: str, depth: int = 1, max_nodes: int = 20, states: str = "current") -> str:
+    """Get a connected subgraph around an entity."""
+    return _graph_post("/graph/get_subgraph", {
+        "entity_id": entity_id,
+        "depth": depth,
+        "max_nodes": max_nodes,
+        "states": [s.strip() for s in states.split(",")],
+    })
+
+
+def graph_add_fact(subject_id: str, predicate: str, object_entity_id: str | None = None,
+                    object_value: str | None = None, object_value_type: str | None = None,
+                    source_kind: str = "user_assertion", source_id: str = "mcp", reason: str = "") -> str:
+    """Manually add a fact to the knowledge graph."""
+    body = {
+        "subject_id": subject_id,
+        "predicate": predicate,
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "reason": reason,
+    }
+    if object_entity_id:
+        body["object_kind"] = "entity"
+        body["object_entity_id"] = object_entity_id
+    else:
+        body["object_kind"] = "value"
+        body["object_value"] = object_value or ""
+        body["object_value_type"] = object_value_type or "text"
+    return _graph_post("/graph/add_fact", body)
+
+
+def graph_correct_fact(fact_id: str, correction: str, reason: str) -> str:
+    """Correct a current fact with a new value. Old fact becomes historical."""
+    return _graph_post("/graph/correct_fact", {
+        "fact_id": fact_id,
+        "correction": correction,
+        "reason": reason,
+    })
+
+
+def graph_queue_status() -> str:
+    """Check the extraction queue status."""
+    return _graph_post("/graph/queue_status", {})
+
+
 # ── MCP server entry point ───────────────────────────────────────────
 
 TOOLS = {
@@ -198,6 +283,82 @@ TOOLS = {
     "agendiary_health": {
         "description": "Check if Agent Diary server is healthy and reachable.",
         "fn": health,
+        "parameters": {},
+    },
+    "graph_find_entity": {
+        "description": "Search the knowledge graph for entities by name or alias. Returns matching entities with their canonical names and types.",
+        "fn": graph_find_entity,
+        "parameters": {
+            "query": {"type": "string", "description": "Name or alias to search for"},
+            "limit": {"type": "number", "description": "Max results (1-20, default 5)", "default": 5},
+        },
+    },
+    "graph_get_entity": {
+        "description": "Get full entity details including current facts, history, and aliases from the knowledge graph.",
+        "fn": graph_get_entity,
+        "parameters": {
+            "entity_id": {"type": "string", "description": "Entity ID (ge_...) or canonical name"},
+            "include_history": {"type": "boolean", "description": "Include historical facts", "default": False},
+        },
+    },
+    "graph_neighbors": {
+        "description": "Explore connections around an entity in the knowledge graph — see what it runs on, who owns it, etc.",
+        "fn": graph_neighbors,
+        "parameters": {
+            "entity_id": {"type": "string", "description": "Entity ID or canonical name"},
+            "states": {"type": "string", "description": "Comma-separated states (current,historical,planned,retracted)", "default": "current"},
+            "depth": {"type": "number", "description": "Connection depth (default 1)", "default": 1},
+        },
+    },
+    "graph_search": {
+        "description": "Search the knowledge graph across both entities and facts. Good for questions like 'what runs on Lucy?' or 'what does Bill own?'",
+        "fn": graph_search,
+        "parameters": {
+            "query": {"type": "string", "description": "Search query"},
+            "states": {"type": "string", "description": "Comma-separated states", "default": "current"},
+        },
+    },
+    "graph_explain_fact": {
+        "description": "Get full details of a fact including all evidence sources, validity dates, and correction history.",
+        "fn": graph_explain_fact,
+        "parameters": {
+            "fact_id": {"type": "string", "description": "Fact ID (gf_...)"},
+        },
+    },
+    "graph_get_subgraph": {
+        "description": "Get a connected subgraph centered on an entity, showing its direct relationships.",
+        "fn": graph_get_subgraph,
+        "parameters": {
+            "entity_id": {"type": "string", "description": "Entity ID or canonical name"},
+            "depth": {"type": "number", "description": "Connection depth (default 1)", "default": 1},
+            "max_nodes": {"type": "number", "description": "Max nodes to return (default 20)", "default": 20},
+            "states": {"type": "string", "description": "Comma-separated states", "default": "current"},
+        },
+    },
+    "graph_add_fact": {
+        "description": "Manually add a fact to the knowledge graph. For single-value predicates like RUNS_ON, this auto-closes any previous current fact.",
+        "fn": graph_add_fact,
+        "parameters": {
+            "subject_id": {"type": "string", "description": "Subject entity ID or name"},
+            "predicate": {"type": "string", "description": "Predicate (RUNS_ON, OWNS, USES, etc.)"},
+            "object_entity_id": {"type": "string", "description": "Object entity ID or name (for entity facts)"},
+            "object_value": {"type": "string", "description": "Object value (for value facts like IP addresses)"},
+            "object_value_type": {"type": "string", "description": "Value type (text, integer, ip_address)", "default": "text"},
+            "reason": {"type": "string", "description": "Why this fact was added", "default": ""},
+        },
+    },
+    "graph_correct_fact": {
+        "description": "Correct a current fact. The old fact becomes historical and a new current fact is created with the correction.",
+        "fn": graph_correct_fact,
+        "parameters": {
+            "fact_id": {"type": "string", "description": "Fact ID to correct"},
+            "correction": {"type": "string", "description": "New value or entity name"},
+            "reason": {"type": "string", "description": "Why the correction was made"},
+        },
+    },
+    "graph_queue_status": {
+        "description": "Check the status of the extraction queue — how many pending, claimed, succeeded, failed jobs.",
+        "fn": graph_queue_status,
         "parameters": {},
     },
 }
@@ -310,9 +471,29 @@ def main():
             # No-op, just acknowledge
             pass
 
+        elif method == "ping":
+            # MCP keepalive: respond so the client doesn't time out and
+            # reconnect-loop the server (this was causing ~8.5min restarts).
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": {}}) + "\n")
+            sys.stdout.flush()
+
+        elif method == "resources/list":
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": {"resources": []}}) + "\n")
+            sys.stdout.flush()
+
+        elif method == "prompts/list":
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": {"prompts": []}}) + "\n")
+            sys.stdout.flush()
+
         else:
-            # Unknown method — but don't crash, the MCP inspector sends these
-            pass
+            # Unknown method. Requests (with an id) must get a JSON-RPC error
+            # response or the client hangs and its keepalive times out; only
+            # notifications (no id) may be silently ignored.
+            if req_id is not None:
+                sys.stdout.write(
+                    json.dumps({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}) + "\n"
+                )
+                sys.stdout.flush()
 
 
 if __name__ == "__main__":
