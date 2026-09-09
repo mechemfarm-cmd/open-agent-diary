@@ -19,13 +19,6 @@ CREATE TABLE IF NOT EXISTS entries (
   truthful_source INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC, entry_id DESC);
-CREATE INDEX IF NOT EXISTS idx_entries_source ON entries(source);
-CREATE INDEX IF NOT EXISTS idx_entries_source_session_id ON entries(source_session_id);
-CREATE INDEX IF NOT EXISTS idx_entries_source_conversation_id ON entries(source_conversation_id);
-CREATE INDEX IF NOT EXISTS idx_entries_import_id ON entries(import_id);
-CREATE INDEX IF NOT EXISTS idx_entries_truthful_source ON entries(truthful_source);
-
 CREATE TABLE IF NOT EXISTS work_trace_events (
   event_id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
@@ -69,10 +62,27 @@ CREATE TABLE IF NOT EXISTS work_trace_entry_links (
   FOREIGN KEY (entry_id) REFERENCES entries(entry_id)
 ) WITHOUT ROWID;
 
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_index_fts USING fts5(
+  entry_id UNINDEXED,
+  artifact_id UNINDEXED,
+  created_at UNINDEXED,
+  memory_text
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS work_trace_fts USING fts5(
+  event_id UNINDEXED,
+  searchable_text
+);
+
 CREATE INDEX IF NOT EXISTS idx_wtel_entry_id ON work_trace_entry_links(entry_id);
+CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC, entry_id DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_source ON entries(source);
+CREATE INDEX IF NOT EXISTS idx_work_trace_created_at ON work_trace_events(created_at DESC, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_work_trace_project ON work_trace_events(project);
+CREATE INDEX IF NOT EXISTS idx_work_trace_event_type ON work_trace_events(event_type);
 """
 
-GRAPH_SCHEMA = r"""
+GRAPH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS graph_entities (
   entity_id TEXT PRIMARY KEY,
   canonical_name TEXT NOT NULL,
@@ -85,6 +95,8 @@ CREATE TABLE IF NOT EXISTS graph_entities (
   metadata TEXT DEFAULT '{}',
   UNIQUE(normalized_name, entity_type)
 );
+
+CREATE INDEX IF NOT EXISTS idx_ge_normalized ON graph_entities(normalized_name);
 
 CREATE TABLE IF NOT EXISTS graph_entity_aliases (
   alias_id TEXT PRIMARY KEY,
@@ -124,6 +136,8 @@ CREATE TABLE IF NOT EXISTS graph_facts (
 CREATE INDEX IF NOT EXISTS idx_gf_subject ON graph_facts(subject_entity_id, predicate, state);
 CREATE INDEX IF NOT EXISTS idx_gf_object_entity ON graph_facts(object_entity_id) WHERE object_entity_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gf_superseded ON graph_facts(superseded_by_fact_id) WHERE superseded_by_fact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_gf_valid ON graph_facts(valid_from, valid_to);
+CREATE INDEX IF NOT EXISTS idx_gf_state ON graph_facts(state);
 
 CREATE TABLE IF NOT EXISTS graph_fact_evidence (
   evidence_id TEXT PRIMARY KEY,
@@ -150,6 +164,7 @@ CREATE TABLE IF NOT EXISTS graph_assertion_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_gae_event_type ON graph_assertion_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_gae_created ON graph_assertion_events(created_at);
 
 CREATE TABLE IF NOT EXISTS graph_extraction_jobs (
   job_id TEXT PRIMARY KEY,
@@ -169,17 +184,57 @@ CREATE TABLE IF NOT EXISTS graph_extraction_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_gej_status ON graph_extraction_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_gej_lease ON graph_extraction_jobs(lease_expiry) WHERE lease_expiry IS NOT NULL;
 """
 
 
 def bootstrap_sqlite(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(sqlite3.connect(db_path, timeout=5.0)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
         conn.executescript(GRAPH_SCHEMA)
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_index)").fetchall()}
-        if "created_at" not in cols:
-            # Legacy scaffold compatibility: add with a safe constant default for existing rows.
+
+        entry_cols = {row[1] for row in conn.execute("PRAGMA table_info(entries)").fetchall()}
+        entry_migrations = {
+            "entry_type": "ALTER TABLE entries ADD COLUMN entry_type TEXT",
+            "source_session_id": "ALTER TABLE entries ADD COLUMN source_session_id TEXT",
+            "source_conversation_id": "ALTER TABLE entries ADD COLUMN source_conversation_id TEXT",
+            "import_id": "ALTER TABLE entries ADD COLUMN import_id TEXT",
+            "truthful_source": "ALTER TABLE entries ADD COLUMN truthful_source INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, ddl in entry_migrations.items():
+            if column not in entry_cols:
+                conn.execute(ddl)
+
+        memory_cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_index)").fetchall()}
+        if "created_at" not in memory_cols:
             conn.execute("ALTER TABLE memory_index ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
-        conn.execute("UPDATE memory_index SET created_at = '' WHERE created_at IS NULL")
+        conn.execute("UPDATE memory_index SET created_at = ? WHERE created_at IS NULL", ("",))
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_source_session_id ON entries(source_session_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_source_conversation_id ON entries(source_conversation_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_import_id ON entries(import_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_truthful_source ON entries(truthful_source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_index_entry_created ON memory_index(entry_id, created_at DESC)")
+
+        # Rebuild FTS indexes from current data
+        conn.execute("DELETE FROM memory_index_fts")
+        conn.execute(
+            """
+            INSERT INTO memory_index_fts(rowid, entry_id, artifact_id, created_at, memory_text)
+            SELECT id, entry_id, artifact_id, created_at, memory_text
+            FROM memory_index
+            """
+        )
+        conn.execute("DELETE FROM work_trace_fts")
+        conn.execute(
+            """
+            INSERT INTO work_trace_fts(event_id, searchable_text)
+            SELECT event_id, searchable_text
+            FROM work_trace_events
+            """
+        )
         conn.commit()

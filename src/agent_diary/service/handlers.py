@@ -2512,108 +2512,176 @@ def graph_fetch_source(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
 
 def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
     _require_fields(payload, ["job_id", "result"])
-    from agent_diary.index.graph_repository import update_extraction_job
+    import sqlite3 as _sqlite3
+    from contextlib import closing as _closing
 
     job_id = payload["job_id"]
     result = payload["result"]
+
+    # Load job row to derive source identity — never trust the submitted payload
+    with _closing(_sqlite3.connect(paths.sqlite_path)) as conn:
+        conn.row_factory = _sqlite3.Row
+        job_row = conn.execute(
+            "SELECT * FROM graph_extraction_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    if not job_row:
+        raise FileNotFoundError(f"extraction job not found: {job_id}")
+
+    source_kind = job_row["source_kind"]
+    source_id = job_row["source_id"]
+    source_timestamp = job_row["source_timestamp"]
     status = "succeeded"
     summary = ""
 
     if result.get("no_facts"):
-        status = "no_facts"
-        summary = result.get("reason", "no facts extracted")
-    else:
-        # Process proposed entities and facts
-        entities_created = 0
-        facts_created = 0
+        from agent_diary.index.graph_repository import update_extraction_job
+        update_extraction_job(paths.sqlite_path, job_id, "no_facts", result_summary=result.get("reason", "no facts extracted"))
+        return {"job_id": job_id, "status": "no_facts", "summary": result.get("reason", "")}
 
-        from agent_diary.index.graph_repository import (
-            get_entity, find_entity, resolve_obvious_alias,
-            insert_entity, insert_fact, insert_evidence, close_current_fact,
-            insert_alias, insert_assertion_event, valid_predicate,
-        )
-        from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence, GraphAssertionEvent
+    # Validate source exists for raw_entry types
+    if source_kind == "raw_entry":
         from agent_diary.index.repository import get_entry_row
-        from uuid import uuid4
+        entry_row = get_entry_row(paths.sqlite_path, source_id)
+        if not entry_row:
+            raise ValueError(f"source entry not found: {source_id}")
+        # Only user-authored entries establish facts (assistant guard)
+        if entry_row["author_role"] != "user":
+            from agent_diary.index.graph_repository import update_extraction_job
+            update_extraction_job(paths.sqlite_path, job_id, "no_facts", result_summary=f"author_role={entry_row['author_role']} not user")
+            return {"job_id": job_id, "status": "no_facts", "summary": "non-user entry skipped"}
 
-        source_kind = result.get("source_kind", "raw_entry")
-        source_id = result.get("source_id", "")
+    # Process proposed entities and facts
+    from agent_diary.index.graph_repository import (
+        resolve_obvious_alias, insert_entity, insert_fact, insert_evidence,
+        close_current_fact, supersede_fact, insert_alias, valid_predicate,
+        get_current_facts_for_subject, update_extraction_job,
+    )
+    from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence
+    from uuid import uuid4
 
-        # Create entities
-        for ent in result.get("entities", []):
-            name = ent.get("name", "")
-            if not name:
-                continue
-            existing = resolve_obvious_alias(paths.sqlite_path, name)
-            if existing:
-                continue  # already exists
-            entity = GraphEntity(
-                canonical_name=name,
-                entity_type=ent.get("type", "other"),
-            )
-            insert_entity(paths.sqlite_path, entity)
-            entities_created += 1
+    entities_created = 0
+    facts_created = 0
+    facts_skipped_dedup = 0
 
-            # Add alias from source
-            alias_id = f"alias_{uuid4().hex}"
-            insert_alias(paths.sqlite_path, alias_id, entity.entity_id, name, source_kind, source_id)
+    # Create entities
+    for ent in result.get("entities", []):
+        name = ent.get("name", "")
+        if not name:
+            continue
+        existing = resolve_obvious_alias(paths.sqlite_path, name)
+        if existing:
+            continue
+        entity = GraphEntity(
+            canonical_name=name,
+            entity_type=ent.get("type", "other"),
+        )
+        insert_entity(paths.sqlite_path, entity)
+        entities_created += 1
+        alias_id = f"alias_{uuid4().hex}"
+        insert_alias(paths.sqlite_path, alias_id, entity.entity_id, name, source_kind, source_id)
 
-        # Create facts
-        for fact_data in result.get("facts", []):
-            subj_name = fact_data.get("subject", "")
+    # Create facts with dedup
+    for fact_data in result.get("facts", []):
+        subj_name = fact_data.get("subject", "")
+        predicate = fact_data.get("predicate", "").upper()
+        if not subj_name or not predicate:
+            continue
+        if not valid_predicate(predicate):
+            continue
+
+        subj_id = resolve_obvious_alias(paths.sqlite_path, subj_name)
+        if not subj_id:
+            continue
+
+        fact_confidence = fact_data.get("confidence", "medium")
+        fact_timestamp = fact_data.get("timestamp", source_timestamp)
+        obj_kind = fact_data.get("object_kind", "entity")
+
+        object_entity_id = None
+        object_value = None
+        object_value_type = None
+
+        if obj_kind == "value":
+            object_value = fact_data.get("object", "")
+            object_value_type = fact_data.get("object_value_type", "text")
+        else:
             obj_name = fact_data.get("object", "")
-            predicate = fact_data.get("predicate", "").upper()
-
-            if not subj_name or not predicate:
+            if not obj_name:
                 continue
-            if not valid_predicate(predicate):
-                continue
-
-            # Resolve subject
-            subj_id = resolve_obvious_alias(paths.sqlite_path, subj_name)
-            if not subj_id:
-                continue  # entity not yet in graph
-
-            # Resolve or create object
             obj_id = resolve_obvious_alias(paths.sqlite_path, obj_name)
-            if not obj_id and obj_name:
-                # Create as new entity
+            if not obj_id:
                 obj_entity = GraphEntity(canonical_name=obj_name)
                 insert_entity(paths.sqlite_path, obj_entity)
                 obj_id = obj_entity.entity_id
                 entities_created += 1
+            object_entity_id = obj_id
 
-            if not obj_id:
-                continue
+        # Dedup: check if an identical current fact already exists
+        existing_current = get_current_facts_for_subject(paths.sqlite_path, subj_id, predicate)
+        found_match = False
+        for ec in existing_current:
+            if object_entity_id and ec.get("object_entity_id") == object_entity_id:
+                found_match = True
+                break
+            if object_value and ec.get("object_value") == object_value:
+                found_match = True
+                break
 
-            # Check for single-value predicate conflict
-            from agent_diary.models.types import PREDICATE_REGISTRY
-            cardinality = PREDICATE_REGISTRY.get(predicate, {}).get("cardinality", "multi")
-            if cardinality == "single":
-                close_current_fact(paths.sqlite_path, subj_id, predicate)
-
-            fact = GraphFact(
-                subject_entity_id=subj_id,
-                predicate=predicate,
-                object_kind="entity",
-                object_entity_id=obj_id,
-                confidence=fact_data.get("confidence", "medium"),
-            )
-            fact_id = insert_fact(paths.sqlite_path, fact)
-            facts_created += 1
-
-            # Evidence
+        if found_match:
+            # Just add evidence to the existing fact
             ev = GraphFactEvidence(
-                fact_id=fact_id,
+                fact_id=existing_current[0]["fact_id"],
                 source_kind=source_kind,
                 source_id=source_id,
-                source_timestamp=fact_data.get("timestamp", _now()),
-                role="establishes",
+                source_timestamp=fact_timestamp,
+                role="supports",
                 extractor_method=result.get("extractor_method"),
                 extractor_version=result.get("extractor_version"),
             )
             insert_evidence(paths.sqlite_path, ev)
+            facts_skipped_dedup += 1
+            continue
 
+        # No duplicate found — create new fact
+        # For single-value predicates, close/supersede current fact
+        from agent_diary.models.types import PREDICATE_REGISTRY
+        cardinality = PREDICATE_REGISTRY.get(predicate, {}).get("cardinality", "multi")
+        old_fact_id = None
+        if cardinality == "single":
+            old_fact_id = close_current_fact(paths.sqlite_path, subj_id, predicate, valid_to=fact_timestamp)
+
+        fact = GraphFact(
+            subject_entity_id=subj_id,
+            predicate=predicate,
+            object_kind=obj_kind,
+            object_entity_id=object_entity_id,
+            object_value=object_value,
+            object_value_type=object_value_type,
+            confidence=fact_confidence,
+            valid_from=fact_timestamp,
+            time_precision=fact_data.get("time_precision", "source"),
+            time_basis=fact_data.get("time_basis", "source_timestamp"),
+        )
+        fact_id = insert_fact(paths.sqlite_path, fact)
+        facts_created += 1
+
+        if old_fact_id:
+            supersede_fact(paths.sqlite_path, old_fact_id, fact_id)
+
+        ev = GraphFactEvidence(
+            fact_id=fact_id,
+            source_kind=source_kind,
+            source_id=source_id,
+            source_timestamp=fact_timestamp,
+            role="establishes",
+            extractor_method=result.get("extractor_method"),
+            extractor_version=result.get("extractor_version"),
+        )
+        insert_evidence(paths.sqlite_path, ev)
+
+    if facts_skipped_dedup:
+        summary = f"created {entities_created} entities, {facts_created} facts, {facts_skipped_dedup} deduped"
+    else:
         summary = f"created {entities_created} entities, {facts_created} facts"
 
     update_extraction_job(paths.sqlite_path, job_id, status, result_summary=summary)

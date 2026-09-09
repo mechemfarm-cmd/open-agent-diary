@@ -305,6 +305,7 @@ def backfill_hermes_work_traces(
     hermes_db: str,
     data_dir: str,
     dry_run: bool = False,
+    session_filter: list[str] | None = None,
 ) -> dict:
     """Main entry point: find Hermes sessions, extract tool calls, import as work traces."""
     from agent_diary.config import default_paths
@@ -321,14 +322,27 @@ def backfill_hermes_work_traces(
     conn = sqlite3.connect(hermes_db)
     conn.row_factory = sqlite3.Row
     try:
-        sessions = conn.execute(
-            """SELECT DISTINCT s.id, s.title, s.started_at
+        if session_filter:
+            placeholders = ",".join("?" for _ in session_filter)
+            sessions = conn.execute(
+                f"""SELECT DISTINCT s.id, s.title, s.started_at
+                   FROM sessions s
+                   JOIN messages m ON m.session_id = s.id
+                   WHERE m.tool_calls IS NOT NULL AND m.tool_calls != '[]'
+                     AND m.role = 'assistant'
+                     AND s.id IN ({placeholders})
+                   ORDER BY s.started_at ASC""",
+                session_filter,
+            ).fetchall()
+        else:
+            sessions = conn.execute(
+                """SELECT DISTINCT s.id, s.title, s.started_at
                FROM sessions s
                JOIN messages m ON m.session_id = s.id
                WHERE m.tool_calls IS NOT NULL AND m.tool_calls != '[]'
                  AND m.role = 'assistant'
                ORDER BY s.started_at ASC"""
-        ).fetchall()
+            ).fetchall()
     finally:
         conn.close()
 
@@ -408,9 +422,16 @@ if __name__ == "__main__":
                         help="Path to Hermes state.db")
     parser.add_argument("--data-dir", required=True,
                         help="Agent Diary data root directory")
+    parser.add_argument("--session-ids", default=None,
+                        help="Comma-separated list of session IDs to process (default: all)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Scan and report, but don't import")
     args = parser.parse_args()
+
+    session_filter = None
+    if args.session_ids:
+        session_filter = [s.strip() for s in args.session_ids.split(",") if s.strip()]
+        print(f"Backfill filter: {len(session_filter)} session(s) specified")
 
     print(f"Hermes work trace backfill")
     print(f"  Diary DB:  {args.diary_db}")
@@ -424,6 +445,7 @@ if __name__ == "__main__":
         hermes_db=args.hermes_db,
         data_dir=args.data_dir,
         dry_run=args.dry_run,
+        session_filter=session_filter,
     )
 
     print()
