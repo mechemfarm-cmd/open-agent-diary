@@ -276,51 +276,114 @@ function formatMetaDateTime(iso) {
 
 function buildOverlayStalenessHtml(artifact) {
   if (!artifact || artifact.overlay_stale !== true) {
-    return "";
+    return document.createDocumentFragment();
   }
   const generatedAt = artifact.artifact_generated_at
     ? formatMetaDateTime(artifact.artifact_generated_at)
     : "unknown";
   const overlayAt = artifact.latest_overlay_at ? formatMetaDateTime(artifact.latest_overlay_at) : "unknown";
-  return `
-    <div class="stale-badge" role="note" aria-label="Artifact may be stale after overlay">
-      May be stale after overlay
-    </div>
-    <div class="muted stale-meta">artifact generated: ${esc(generatedAt)}</div>
-    <div class="muted stale-meta">latest overlay: ${esc(overlayAt)}</div>
-  `;
+  const frag = document.createDocumentFragment();
+  const badge = document.createElement("div");
+  badge.className = "stale-badge";
+  badge.setAttribute("role", "note");
+  badge.setAttribute("aria-label", "Artifact may be stale after overlay");
+  badge.textContent = "May be stale after overlay";
+  frag.appendChild(badge);
+  const genDiv = document.createElement("div");
+  genDiv.className = "muted stale-meta";
+  genDiv.textContent = `artifact generated: ${generatedAt}`;
+  frag.appendChild(genDiv);
+  const overlayDiv = document.createElement("div");
+  overlayDiv.className = "muted stale-meta";
+  overlayDiv.textContent = `latest overlay: ${overlayAt}`;
+  frag.appendChild(overlayDiv);
+  return frag;
 }
 
 function buildSourceEntryLinksHtml(sourceEntryIds) {
   const ids = Array.isArray(sourceEntryIds) ? sourceEntryIds.filter((id) => String(id || "").trim()) : [];
   if (!ids.length) {
-    return '<span class="muted">none</span>';
+    const span = document.createElement("span");
+    span.className = "muted";
+    span.textContent = "none";
+    return span;
   }
-  return ids
-    .map((id) => `<button class="support-link" type="button" data-support-entry-id="${esc(id)}">${esc(id)}</button>`)
-    .join(" ");
+  const container = document.createElement("span");
+  container.className = "support-links";
+  ids.forEach((id, i) => {
+    const btn = document.createElement("button");
+    btn.className = "support-link";
+    btn.type = "button";
+    btn.dataset.supportEntryId = id;
+    btn.textContent = id;
+    container.appendChild(btn);
+    if (i < ids.length - 1) container.appendChild(document.createTextNode(" "));
+  });
+  return container;
 }
 
 function buildProvenanceHtml(artifact) {
   const p = artifact?.provenance || {};
-  const rows = [];
-  if (p.schema_version) rows.push(`<div class="muted"><strong>schema:</strong> ${esc(p.schema_version)}</div>`);
-  if (p.method) rows.push(`<div class="muted"><strong>method:</strong> ${esc(p.method)}</div>`);
-  if (p.method_version) rows.push(`<div class="muted"><strong>method version:</strong> ${esc(p.method_version)}</div>`);
-  if (p.generated_at) rows.push(`<div class="muted"><strong>generated:</strong> ${esc(formatMetaDateTime(p.generated_at))}</div>`);
-  if (p.analysis_window && (p.analysis_window.start || p.analysis_window.end)) {
-    rows.push(
-      `<div class="muted"><strong>window:</strong> ${esc(p.analysis_window.start || "?")} → ${esc(p.analysis_window.end || "?")}</div>`
-    );
+  const block = document.createElement("div");
+  block.className = "provenance-block";
+  const badge = document.createElement("div");
+  badge.className = "derived-badge";
+  badge.textContent = "Provenance";
+  block.appendChild(badge);
+  if (p.schema_version) {
+    const d = document.createElement("div");
+    d.className = "muted";
+    const s = document.createElement("strong");
+    s.textContent = "schema:";
+    d.appendChild(s);
+    d.appendChild(document.createTextNode(" " + p.schema_version));
+    block.appendChild(d);
   }
-  const sourceIdsHtml = buildSourceEntryLinksHtml(p.source_entry_ids);
-  rows.push(`<div class="muted"><strong>source entries:</strong> <span class="support-links">${sourceIdsHtml}</span></div>`);
-  return `
-    <div class="provenance-block">
-      <div class="derived-badge">Provenance</div>
-      ${rows.join("")}
-    </div>
-  `;
+  if (p.method) {
+    const d = document.createElement("div");
+    d.className = "muted";
+    const s = document.createElement("strong");
+    s.textContent = "method:";
+    d.appendChild(s);
+    d.appendChild(document.createTextNode(" " + p.method));
+    block.appendChild(d);
+  }
+  if (p.method_version) {
+    const d = document.createElement("div");
+    d.className = "muted";
+    const s = document.createElement("strong");
+    s.textContent = "method version:";
+    d.appendChild(s);
+    d.appendChild(document.createTextNode(" " + p.method_version));
+    block.appendChild(d);
+  }
+  if (p.generated_at) {
+    const d = document.createElement("div");
+    d.className = "muted";
+    const s = document.createElement("strong");
+    s.textContent = "generated:";
+    d.appendChild(s);
+    d.appendChild(document.createTextNode(" " + formatMetaDateTime(p.generated_at)));
+    block.appendChild(d);
+  }
+  if (p.analysis_window && (p.analysis_window.start || p.analysis_window.end)) {
+    const d = document.createElement("div");
+    d.className = "muted";
+    const s = document.createElement("strong");
+    s.textContent = "window:";
+    d.appendChild(s);
+    d.appendChild(document.createTextNode(` ${p.analysis_window.start || "?"} → ${p.analysis_window.end || "?"}`));
+    block.appendChild(d);
+  }
+  const sourceDiv = document.createElement("div");
+  sourceDiv.className = "muted";
+  const sourceS = document.createElement("strong");
+  sourceS.textContent = "source entries:";
+  sourceDiv.appendChild(sourceS);
+  sourceDiv.appendChild(document.createTextNode(" "));
+  sourceDiv.appendChild(buildSourceEntryLinksHtml(p.source_entry_ids));
+  block.appendChild(sourceDiv);
+  return block;
 }
 
 function normalizeSpeakerLabel(label) {
@@ -456,8 +519,8 @@ function renderLoops(loopArtifacts) {
     addMeta("status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : ""));
 
     // Build provenance/overlay sections (these use safe esc() internally)
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    li.appendChild(buildProvenanceHtml(artifact));
+    li.appendChild(buildOverlayStalenessHtml(artifact));
 
     const badge = document.createElement("div");
     badge.className = "derived-badge";
@@ -795,11 +858,11 @@ function renderDetail(detail) {
     content.textContent = currentBrief.content || "";
     briefBody.appendChild(content);
     const provenance = document.createElement("div");
-    provenance.innerHTML = buildProvenanceHtml(currentBrief);
+    provenance.appendChild(buildProvenanceHtml(currentBrief));
     briefBody.appendChild(provenance);
     if (currentBrief.overlay_stale === true) {
       const stale = document.createElement("div");
-      stale.innerHTML = buildOverlayStalenessHtml(currentBrief);
+      stale.appendChild(buildOverlayStalenessHtml(currentBrief));
       briefBody.appendChild(stale);
     }
     briefDetails.open = true;
@@ -833,8 +896,8 @@ function renderDetail(detail) {
     prod.textContent = "producer: " + (artifact.producer || "");
     li.appendChild(prod);
 
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    li.appendChild(buildProvenanceHtml(artifact));
+    li.appendChild(buildOverlayStalenessHtml(artifact));
 
     const pre = document.createElement("pre");
     pre.className = "artifact-body";
@@ -910,8 +973,8 @@ function renderDetail(detail) {
     statusDiv.className = "muted";
     statusDiv.textContent = "status: " + (artifact.lifecycle_status || "active") + (artifact.is_current ? " · current" : "");
     li.appendChild(statusDiv);
-    li.insertAdjacentHTML("beforeend", buildProvenanceHtml(artifact));
-    li.insertAdjacentHTML("beforeend", buildOverlayStalenessHtml(artifact));
+    li.appendChild(buildProvenanceHtml(artifact));
+    li.appendChild(buildOverlayStalenessHtml(artifact));
     for (const btn of li.querySelectorAll("button[data-support-entry-id]")) {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-support-entry-id");
