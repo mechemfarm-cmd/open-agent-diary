@@ -950,19 +950,29 @@ function renderSearchResults(matches) {
   }
   for (const hit of matches) {
     const isMemory = hit.match_layer === "compressed_memory";
-    const layerBadgeHtml = isMemory
-      ? '<span class="layer-badge layer-badge-memory">via memory</span>'
-      : '<span class="layer-badge layer-badge-raw">direct</span>';
     const li = document.createElement("li");
     li.className = "item";
-    li.innerHTML = `
-      <button data-entry-id="${hit.entry_id}" aria-current="${state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false"}" class="${state.selectedSearchHitEntryId === hit.entry_id ? "active" : ""}">
-        <div>${layerBadgeHtml}</div>
-        <div class="muted">${formatMetaDateTime(hit.indexed_at)}${hit.artifact_id ? ` · artifact ${hit.artifact_id}` : ""}</div>
-        <div class="preview">${hit.match_text}</div>
-      </button>
-    `;
-    li.querySelector("button").addEventListener("click", async () => {
+    const btn = document.createElement("button");
+    btn.dataset.entryId = hit.entry_id;
+    btn.setAttribute("aria-current", state.selectedSearchHitEntryId === hit.entry_id ? "true" : "false");
+    if (state.selectedSearchHitEntryId === hit.entry_id) btn.classList.add("active");
+    const badgeDiv = document.createElement("div");
+    const badge = document.createElement("span");
+    badge.className = isMemory ? "layer-badge layer-badge-memory" : "layer-badge layer-badge-raw";
+    badge.textContent = isMemory ? "via memory" : "direct";
+    badgeDiv.appendChild(badge);
+    btn.appendChild(badgeDiv);
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "muted";
+    metaDiv.textContent = formatMetaDateTime(hit.indexed_at);
+    if (hit.artifact_id) metaDiv.textContent += ` · artifact ${hit.artifact_id}`;
+    btn.appendChild(metaDiv);
+    const previewDiv = document.createElement("div");
+    previewDiv.className = "preview";
+    previewDiv.textContent = hit.match_text;
+    btn.appendChild(previewDiv);
+    li.appendChild(btn);
+    btn.addEventListener("click", async () => {
       state.selectedSearchHitEntryId = hit.entry_id;
       state.openedFromSearchHit = {
         entry_id: hit.entry_id,
@@ -988,16 +998,27 @@ function renderImports(items) {
     const li = document.createElement("li");
     li.className = "item";
     const active = state.importId && state.importId === item.import_id;
-    const scopedConversation = item.source_conversation_id ? ` · ${item.source_conversation_id}` : "";
-    const scopedSession = item.source_session_id ? ` · ${item.source_session_id}` : "";
-    li.innerHTML = `
-      <button type="button" data-import-id="${item.import_id}" class="${active ? "active" : ""}" aria-current="${active ? "true" : "false"}">
-        <div><strong>${item.import_id}</strong></div>
-        <div class="muted">${formatMetaDateTime(item.imported_at || "")}${scopedConversation}${scopedSession}</div>
-        <div class="muted">imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}</div>
-      </button>
-    `;
-    const btn = li.querySelector("button");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.importId = item.import_id;
+    if (active) btn.classList.add("active");
+    btn.setAttribute("aria-current", active ? "true" : "false");
+    const idDiv = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = item.import_id;
+    idDiv.appendChild(strong);
+    btn.appendChild(idDiv);
+    const metaDiv = document.createElement("div");
+    metaDiv.className = "muted";
+    metaDiv.textContent = formatMetaDateTime(item.imported_at || "");
+    if (item.source_conversation_id) metaDiv.textContent += ` · ${item.source_conversation_id}`;
+    if (item.source_session_id) metaDiv.textContent += ` · ${item.source_session_id}`;
+    btn.appendChild(metaDiv);
+    const countDiv = document.createElement("div");
+    countDiv.className = "muted";
+    countDiv.textContent = `imported ${item.imported_count || 0} · skipped duplicates ${item.skipped_duplicate_count || 0}`;
+    btn.appendChild(countDiv);
+    li.appendChild(btn);
     btn.addEventListener("click", async () => {
       state.importId = String(item.import_id || "").trim();
       if (item.source_conversation_id) {
