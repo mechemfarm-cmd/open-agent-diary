@@ -1030,10 +1030,10 @@ function renderSearchResults(matches) {
     metaDiv.textContent = formatMetaDateTime(hit.indexed_at);
     if (hit.artifact_id) metaDiv.textContent += ` · artifact ${hit.artifact_id}`;
     btn.appendChild(metaDiv);
-    const previewDiv = document.createElement("div");
-    previewDiv.className = "preview";
-    previewDiv.textContent = hit.match_text;
-    btn.appendChild(previewDiv);
+    const preview = document.createElement("div");
+    preview.className = "preview";
+    preview.textContent = hit.match_text;
+    btn.appendChild(preview);
     li.appendChild(btn);
     btn.addEventListener("click", async () => {
       state.selectedSearchHitEntryId = hit.entry_id;
