@@ -1622,7 +1622,13 @@ async function renderGraphLanding() {
     const statusLine = document.createElement("p");
     statusLine.className = "graph-status";
     if (processed === 0 && total > 0) {
-      statusLine.innerHTML = `Graph not built yet. ${esc(total)} diary entries available. Run <code>agent-diary graph-backfill</code> on the server to process history, or add facts manually below.`;
+      const msg = document.createElement("span");
+      msg.appendChild(document.createTextNode(`Graph not built yet. ${total} diary entries available. Run `));
+      const code = document.createElement("code");
+      code.textContent = "agent-diary graph-backfill";
+      msg.appendChild(code);
+      msg.appendChild(document.createTextNode(" on the server to process history, or add facts manually below."));
+      statusLine.appendChild(msg);
     } else if (total > 0) {
       statusLine.textContent = `${processed}/${total} entries processed. ${q.pending || 0} queued.`;
     }
