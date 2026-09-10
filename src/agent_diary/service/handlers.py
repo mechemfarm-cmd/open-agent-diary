@@ -2497,12 +2497,13 @@ def graph_fetch_source(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
         if not entry_row:
             raise FileNotFoundError(f"source entry not found: {source_id}")
         entry = fetch_raw_entry(paths, source_id)
+        raw = entry.get("entry", entry)
         return {
             "job_id": job_id,
             "source_kind": source_kind,
             "source_id": source_id,
             "source_timestamp": entry_row["created_at"],
-            "content": entry.get("content", ""),
+            "content": raw.get("content", ""),
             "author_role": entry_row["author_role"],
         }
     elif source_kind == "user_assertion":
@@ -2776,6 +2777,58 @@ def graph_enqueue_recent(paths: Paths, payload: dict[str, Any]) -> dict[str, Any
         )
         enqueued += 1
     return {"enqueued": enqueued}
+
+
+def graph_export(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    """Export the entire knowledge graph (entities + current facts) for visualization."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    conn = sqlite3.connect(paths.sqlite_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        # All active entities with aliases
+        entities = []
+        ent_rows = conn.execute(
+            "SELECT * FROM graph_entities WHERE lifecycle_status = 'active' ORDER BY canonical_name"
+        ).fetchall()
+        alias_rows = conn.execute(
+            "SELECT entity_id, alias FROM graph_entity_aliases ORDER BY entity_id"
+        ).fetchall()
+        aliases_by_ent: dict[str, list[str]] = {}
+        for a in alias_rows:
+            aliases_by_ent.setdefault(a["entity_id"], []).append(a["alias"])
+        for r in ent_rows:
+            eid = r["entity_id"]
+            ent = dict(r)
+            ent["aliases"] = aliases_by_ent.get(eid, [])
+            entities.append(ent)
+
+        # Current facts, with resolved object label
+        facts = []
+        fact_rows = conn.execute(
+            """
+            SELECT gf.*, ge.canonical_name AS subject_name, geo.canonical_name AS object_name
+            FROM graph_facts gf
+            LEFT JOIN graph_entities ge ON ge.entity_id = gf.subject_entity_id
+            LEFT JOIN graph_entities geo ON geo.entity_id = gf.object_entity_id
+            WHERE gf.state = 'current'
+            ORDER BY gf.predicate, ge.canonical_name
+            """
+        ).fetchall()
+        for r in fact_rows:
+            f = dict(r)
+            facts.append(f)
+    finally:
+        conn.close()
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "entity_count": len(entities),
+        "fact_count": len(facts),
+        "entities": entities,
+        "facts": facts,
+    }
 
 
 def _now() -> str:

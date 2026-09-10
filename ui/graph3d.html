@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Diary — Knowledge Graph (3D)</title>
+<style>
+  :root {
+    --bg: #0a0a12;
+    --panel: rgba(18, 18, 30, 0.92);
+    --border: #2a2a44;
+    --text: #e0e0f0;
+    --muted: #808090;
+    --accent: #4a7dff;
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: "SF Mono", "Fira Code", Consolas, monospace; overflow: hidden; height: 100%; }
+  #graph-container { position: fixed; inset: 0; }
+  canvas { display: block; }
+  header { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: linear-gradient(180deg, rgba(10,10,18,0.95), rgba(10,10,18,0.55)); border-bottom: 1px solid #1a1a2e; backdrop-filter: blur(6px); }
+  header h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: #e0e0f0; text-shadow: 0 0 12px rgba(74, 125, 255, 0.35); }
+  header .sub { font-size: 12px; color: var(--muted); }
+  .spacer { flex: 1; }
+  .btn { background: rgba(74,125,255,0.14); color: #4a7dff; border: 1px solid rgba(74,125,255,0.35); border-radius: 20px; padding: 5px 12px; font-size: 12px; cursor: pointer; text-decoration: none; font-family: inherit; }
+  .btn:hover { background: rgba(74,125,255,0.25); color: #fff; }
+  .btn.back { color: #8090a0; border-color: #2a2a44; background: rgba(255,255,255,0.05); }
+  #stats { position: fixed; bottom: 14px; right: 16px; z-index: 10; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; text-align: right; }
+  #stats strong { color: var(--text); }
+  #detail-panel { position: fixed; top: 62px; right: 16px; z-index: 10; width: 300px; max-height: calc(100vh - 100px); overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+  #detail-panel:not(.show) { display: none; }
+  #detail-panel .close { float: right; cursor: pointer; opacity: 0.6; font-size: 16px; background: none; border: none; color: var(--text); }
+  #detail-panel h2 { margin: 0 0 10px; font-size: 15px; letter-spacing: 0.05em; }
+  .type-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; margin-bottom: 8px; }
+  #detail-panel ul { margin: 6px 0 0; padding-left: 18px; }
+  #detail-panel li { margin: 3px 0; }
+  #detail-panel .muted { color: var(--muted); font-size: 12px; }
+  .hint { position: fixed; bottom: 14px; left: 16px; z-index: 10; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; max-width: 340px; }
+  .loading { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--bg); flex-direction: column; gap: 12px; font-family: inherit; }
+  .loading .spin { width: 36px; height: 36px; border: 3px solid rgba(74,125,255,0.2); border-top-color: #4a7dff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .legend { position: fixed; bottom: 14px; right: 16px; z-index: 9; font-size: 11px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 70px; display: none; }
+  .legend-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Agent Diary — Knowledge Graph</h1>
+    <span class="sub" id="header-stats">loading graph…</span>
+    <div class="spacer"></div>
+    <a class="btn back" href="./">← Back to Diary</a>
+  </header>
+
+  <div id="graph-container"></div>
+
+  <div class="hint">
+    🖱️ <b>Drag</b> to rotate · <b>Scroll</b> to zoom · <b>Right-drag</b> to pan · <b>Click a node</b> for details
+  </div>
+
+  <div id="stats"><strong id="stat-entities">0</strong> entities<br/><strong id="stat-facts">0</strong> relationships</div>
+
+  <div id="detail-panel">
+    <button class="close" id="detail-close" title="Close">✕</button>
+    <div id="detail-content"></div>
+  </div>
+
+  <div class="loading" id="loading"><div class="spin"></div><div>Building 3D graph…</div></div>
+
+  <!-- Three.js + 3D Force Graph from CDN -->
+  <script src="https://unpkg.com/3d-force-graph"></script>
+  <script>
+    const API_BASE = new URL(document.baseURI).origin;
+    const TYPE_COLORS = {
+      person: "#bf6aff",
+      device: "#4a7dff",
+      software_service: "#4acf7d",
+      project: "#ff7a4a",
+      organization: "#ffaa44",
+      place: "#4fd6c3",
+      other: "#808090",
+    };
+
+    async function fetchAll() {
+      const resp = await fetch(API_BASE + "/graph/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (!resp.ok) throw new Error("export failed: " + resp.status);
+      return (await resp.json()).result;
+    }
+
+    function entityColor(type) { return TYPE_COLORS[type] || TYPE_COLORS.other; }
+
+    function factLabel(f) {
+      if (f.object_value) return f.object_value;
+      return f.object_name || f.object_entity_id || "?";
+    }
+
+    function render(node) {
+      const panel = document.getElementById("detail-content");
+      const type = node._entityType || "other";
+      const facts = node._facts || [];
+      let html = `<div class="type-badge" style="background:${entityColor(type)}22;color:${entityColor(type)};border:1px solid ${entityColor(type)}55">${type}</div>`;
+      html += `<h2>${node.name}</h2>`;
+      if (node._aliases && node._aliases.length) html += `<div class="muted">aliases: ${node._aliases.join(", ")}</div>`;
+      if (facts.length) {
+        html += `<ul>${facts.map(f => `<li><strong>${f.predicate}</strong> → ${factLabel(f)}</li>`).join("")}</ul>`;
+      } else {
+        html += `<div class="muted">No relationships yet.</div>`;
+      }
+      panel.innerHTML = html;
+    }
+
+    async function init() {
+      try {
+        const data = await fetchAll();
+        document.getElementById("header-stats").textContent = `${data.entity_count} entities · ${data.fact_count} relationships`;
+        document.getElementById("stat-entities").textContent = data.entity_count;
+        document.getElementById("stat-facts").textContent = data.fact_count;
+
+        const entitiesById = new Map();
+        const nodes = data.entities.map(e => {
+          const n = { id: e.entity_id, name: e.canonical_name, _entityType: e.entity_type, _aliases: e.aliases || [] };
+          entitiesById.set(e.entity_id, n);
+          return n;
+        });
+
+        const factsBySubject = new Map();
+        const links = data.facts.map(f => {
+          if (!entitiesById.has(f.subject_entity_id)) return null;
+          (factsBySubject.get(f.subject_entity_id) || factsBySubject.set(f.subject_entity_id, []).get(f.subject_entity_id)).push(f);
+          return {
+            source: f.subject_entity_id,
+            target: f.object_entity_id || f.subject_entity_id,
+            label: f.predicate,
+            _fact: f,
+          };
+        }).filter(Boolean);
+
+        // attach facts to their subject node for the detail panel
+        nodes.forEach(n => { n._facts = factsBySubject.get(n.id) || []; });
+
+        const Graph = ForceGraph3D()(document.getElementById("graph-container"))
+          .graphData({ nodes, links })
+          .nodeLabel(n => `${n.name} (${n._entityType})`)
+          .nodeColor(n => entityColor(n._entityType))
+          .nodeVal(n => 6)
+          .nodeRelSize(4)
+          .linkColor(() => "rgba(150, 165, 190, 0.55)")
+          .linkWidth(1.2)
+          .linkLabel(l => `${l.source.name} ${l.label} ${l.target.name}`)
+          .linkDirectionalParticles(1)
+          .linkDirectionalParticleWidth(2)
+          .onNodeClick(n => { render(n); document.getElementById("detail-panel").classList.add("show"); })
+          .onBackgroundClick(() => document.getElementById("detail-panel").classList.remove("show"))
+          .backgroundColor("#0b0e14");
+
+        // A bit of initial spread
+        Graph.d3Force("charge").strength(-140);
+        Graph.d3Force("link").distance(60);
+
+        document.getElementById("loading").remove();
+      } catch (err) {
+        document.getElementById("loading").innerHTML = `<div style="color:#ff6b6b">Failed to load graph: ${err.message}</div>`;
+      }
+    }
+
+    document.getElementById("detail-close").addEventListener("click", () => document.getElementById("detail-panel").classList.remove("show"));
+    init();
+  </script>
+</body>
+</html>

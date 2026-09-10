@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Diary UI Shell</title>
-    <link rel="stylesheet" href="./styles.css?v=20260529b" />
+    <link rel="stylesheet" href="./styles.css?v=20260910-netmap" />
   </head>
   <body>
     <a class="skip-link" href="#detailBody">Skip to diary entry</a>
@@ -25,6 +25,7 @@
         <input id="apiBase" type="text" value="http://127.0.0.1:8041" autocomplete="off" placeholder="http://your-server:8041" />
         <span id="statusDot" class="status-dot status-unknown" title="Connection status"></span>
         <button id="graphToggleBtn" type="button" title="Toggle knowledge graph view">Graph</button>
+        <a id="graph3dBtn" href="./graph3d.html" title="Open 3D knowledge graph visualization" class="topbar-link">3D Graph</a>
         <button id="reloadBtn">Connect</button>
       </div>
     </header>

@@ -54,6 +54,7 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         "/graph/backfill": handlers.graph_backfill,
         "/graph/backfill_status": handlers.graph_backfill_status,
         "/graph/enqueue_recent": handlers.graph_enqueue_recent,
+        "/graph/export": handlers.graph_export,
     }
 
     ui_root: Path | None = None

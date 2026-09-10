@@ -58,7 +58,12 @@ def _post(path: str, body: dict) -> dict:
         url, data=data, headers={"Content-Type": "application/json"}, method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        payload = json.loads(resp.read().decode("utf-8"))
+    # Unwrap the server's {"ok": true, "result": {...}} envelope so callers
+    # can read fields directly (e.g. source.get("content"), claimed.get("jobs")).
+    if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+        return payload["result"]
+    return payload
 
 
 def call_llm(batch_text: str) -> dict:
