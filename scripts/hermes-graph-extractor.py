@@ -4,7 +4,7 @@ to an LLM, and submits structured facts back to the graph.
 
 Decision summary (agreed with operator):
 - Batches multiple source texts per LLM call to control cost.
-- Only direct user statements establish facts; assistant-only text is skipped here.
+- Processes all conversation roles; lets the LLM judge factworthiness and confidence.
 - Calls the Agent Diary HTTP API directly (not MCP) for extraction flows.
 
 Usage:
@@ -29,15 +29,18 @@ LEASE_SECONDS = int(os.environ.get("GRAPH_EXTRACTOR_LEASE_SECONDS", "600"))
 
 SYSTEM_PROMPT = """You extract structured facts from diary conversations for a local knowledge graph.
 Rules:
-1. Only extract facts that are DIRECT, UNAMBIGUOUS user statements about persistent state:
-   - Device relationships (RUNS_ON, OWNS, CONNECTED_TO, LOCATED_IN)
-   - Software/services (USES, RUNS_ON)
-   - Personal/project relationships (MEMBER_OF, WORKS_ON)
-2. NEVER extract from assistant-only text. Ignore the assistant's own claims.
+1. Extract facts from ANY conversation content — user statements, agent statements, discussions
+   about devices, software, projects, people, and their relationships. Surface what's there.
+2. Assign confidence: high (explicit/first-hand statement), medium (strong inference), low (speculative/hearsay).
 3. Ignore speculation ("I might...", "maybe..."), intentions, or transient chat.
-4. Normalize predicate names to: OWNS, RUNS_ON, USES, CONNECTED_TO, MEMBER_OF, WORKS_ON, LOCATED_IN, HAS_RAM, HAS_IP_ADDRESS, HAS_OS.
+4. Normalize predicate names. Common ones: OWNS, RUNS_ON, USES, CONNECTED_TO, MEMBER_OF,
+   WORKS_ON, LOCATED_IN, HAS_RAM, HAS_IP_ADDRESS, HAS_OS, HAS_DOMAIN, HAS_EMAIL, HAS_STORAGE,
+   HAS_ARCHITECTURE, HAS_VERSION, HAS_CREDENTIAL, HAS_BACKUP, HAS_CONFIG, CONTAINS,
+   REQUIRES, DEPENDS_ON, MONITORS, REPLACES, AUTHENTICATES_WITH, REPORTS_TO.
 5. Entity types: person, device, software_service, project, place, organization, other.
-6. Confidence: high (explicit statement), medium (strong inference from context), low (unclear).
+6. If the content is mostly transient chat or system boilerplate with no extractable facts,
+   return {"no_facts": true, "reason": "brief explanation"}. Be generous — extract what you
+   can with appropriate confidence rather than returning no_facts.
 
 Respond with ONLY a JSON object:
 {
@@ -108,11 +111,9 @@ def process_job(job: dict) -> None:
         _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": "empty source"}})
         return
 
-    # Skip only assistant-only entries. "mixed" chunks contain user turns
-    # (prefixed like "sampleuser: ...") and the LLM prompt already ignores
-    # assistant text, so they must still be processed for fact extraction.
-    if author_role == "assistant":
-        _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": "author_role=assistant (assistant-only text)"}})
+    # Process all roles — the LLM judges factworthiness from content
+    if not author_role:
+        _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": "empty author_role"}})
         return
 
     try:

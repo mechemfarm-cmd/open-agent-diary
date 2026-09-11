@@ -2545,11 +2545,6 @@ def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, 
         entry_row = get_entry_row(paths.sqlite_path, source_id)
         if not entry_row:
             raise ValueError(f"source entry not found: {source_id}")
-        # Only user-authored entries establish facts (assistant guard)
-        if entry_row["author_role"] != "user":
-            from agent_diary.index.graph_repository import update_extraction_job
-            update_extraction_job(paths.sqlite_path, job_id, "no_facts", result_summary=f"author_role={entry_row['author_role']} not user")
-            return {"job_id": job_id, "status": "no_facts", "summary": "non-user entry skipped"}
 
     # Process proposed entities and facts
     from agent_diary.index.graph_repository import (
