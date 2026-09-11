@@ -170,6 +170,7 @@ input[type="text"], textarea, select {
   padding: 7px 10px; font: inherit; font-size: 0.85rem;
 }
 input:focus, textarea:focus, select:focus { border-color: var(--accent); outline: none; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 
 button {
   border: 1px solid var(--border); border-radius: 8px;
