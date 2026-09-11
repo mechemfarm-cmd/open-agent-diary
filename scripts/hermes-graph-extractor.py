@@ -108,9 +108,11 @@ def process_job(job: dict) -> None:
         _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": "empty source"}})
         return
 
-    # Only process user-authored entries for fact establishment
-    if author_role and author_role != "user":
-        _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": f"author_role={author_role} not user"}})
+    # Skip only assistant-only entries. "mixed" chunks contain user turns
+    # (prefixed like "sampleuser: ...") and the LLM prompt already ignores
+    # assistant text, so they must still be processed for fact extraction.
+    if author_role == "assistant":
+        _post("/graph/submit_extraction", {"job_id": job_id, "result": {"no_facts": True, "reason": "author_role=assistant (assistant-only text)"}})
         return
 
     try:
