@@ -470,7 +470,7 @@ body {
   border-radius: 14px;
   padding: 0;
   margin-bottom: 6px;
-  background: rgba(255, 251, 243, 0.8);
+  background: rgba(255, 251, 243, 1.0);
 }
 
 .import-inspector summary {
@@ -541,7 +541,7 @@ body {
   gap: 6px;
   align-items: center;
   padding: 4px 7px;
-  background: rgba(230, 244, 240, 0.92);
+  background: rgba(230, 244, 240, 1.0);
   border: 1px solid rgba(47, 111, 107, 0.4);
   border-radius: 12px;
   font-size: 0.76rem;
@@ -666,7 +666,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: #9090a0;
-  background: rgba(255, 248, 236, 0.96);
+  background: rgba(255, 248, 236, 1.0);
   border-radius: 10px 10px 0 0;
 }
 
@@ -754,7 +754,7 @@ body {
   font-size: 0.75rem;
   font-family: var(--ui-font);
   color: #808090;
-  background: rgba(255, 249, 239, 0.95);
+  background: rgba(255, 249, 239, 1.0);
 }
 
 .brief-detail {
@@ -764,14 +764,14 @@ body {
   padding: 10px 12px;
   border: 1px solid rgba(74, 125, 255, 0.45);
   border-radius: 14px;
-  background: rgba(255, 248, 236, 0.78);
+  background: rgba(255, 248, 236, 1.0);
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .recall-banner {
-  background: rgba(251, 240, 200, 0.92);
+  background: rgba(251, 240, 200, 1.0);
   border: 1px solid rgba(74, 125, 255, 0.65);
   border-radius: 12px;
   padding: 8px 12px;
@@ -844,7 +844,7 @@ body {
   border-left: 5px solid var(--turn-accent);
   border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(255, 252, 246, 0.98) 0%, var(--turn-surface) 100%);
+    linear-gradient(180deg, rgba(255, 252, 246, 1.0) 0%, var(--turn-surface) 100%);
   box-shadow:
     0 6px 16px rgba(79, 52, 33, 0.06),
     inset 0 0 0 1px rgba(18, 18, 30, 0.7);
@@ -960,7 +960,7 @@ body {
   border-radius: 999px;
   font-size: 0.72rem;
   color: #6c4735;
-  background: rgba(251, 243, 226, 0.95);
+  background: rgba(251, 243, 226, 1.0);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -974,7 +974,7 @@ body {
   border-radius: 999px;
   font-size: 0.72rem;
   color: #6b1f28;
-  background: rgba(255, 236, 238, 0.96);
+  background: rgba(255, 236, 238, 1.0);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -1054,7 +1054,7 @@ body {
   border-radius: 999px;
   font-size: 0.72rem;
   color: #6c4735;
-  background: rgba(255, 249, 239, 0.9);
+  background: rgba(255, 249, 239, 1.0);
 }
 
 .work-trace-links {
@@ -1092,13 +1092,13 @@ body {
   border-radius: 999px;
   font-size: 0.72rem;
   color: var(--muted);
-  background: rgba(255, 249, 239, 0.95);
+  background: rgba(255, 249, 239, 1.0);
 }
 
 .status-pill-stale {
   border-color: rgba(181, 103, 108, 0.7);
   color: #6b1f28;
-  background: rgba(255, 236, 238, 0.96);
+  background: rgba(255, 236, 238, 1.0);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -1160,13 +1160,13 @@ body {
 }
 
 .layer-badge-memory {
-  background: rgba(251, 240, 200, 0.95);
+  background: rgba(251, 240, 200, 1.0);
   border: 1px solid rgba(74, 125, 255, 0.65);
   color: #7a5212;
 }
 
 .layer-badge-raw {
-  background: rgba(237, 244, 241, 0.95);
+  background: rgba(237, 244, 241, 1.0);
   border: 1px solid rgba(100, 141, 130, 0.5);
   color: #1f4a3c;
 }
@@ -1210,12 +1210,12 @@ button:focus-visible,
 
 .panel-search {
   background:
-    linear-gradient(180deg, rgba(253, 246, 232, 0.98) 0%, rgba(245, 231, 214, 0.96) 100%);
+    linear-gradient(180deg, rgba(253, 246, 232, 1.0) 0%, rgba(245, 231, 214, 1.0) 100%);
 }
 
 .panel-timeline {
   background:
-    linear-gradient(180deg, rgba(252, 247, 237, 0.98) 0%, rgba(241, 231, 211, 0.96) 100%);
+    linear-gradient(180deg, rgba(252, 247, 237, 1.0) 0%, rgba(241, 231, 211, 1.0) 100%);
   flex: 1 1 0;
 }
 
@@ -1226,7 +1226,7 @@ button:focus-visible,
 
 .panel-interpretation {
   background:
-    linear-gradient(180deg, rgba(252, 247, 237, 0.98) 0%, rgba(241, 231, 211, 0.96) 100%);
+    linear-gradient(180deg, rgba(252, 247, 237, 1.0) 0%, rgba(241, 231, 211, 1.0) 100%);
 }
 
 .panel-interpretation::before {
