@@ -28,6 +28,9 @@ src-tauri/target/
 
 # Private/local release hazards
 backups/
+
+# Per-instance UI branding (each instance sets its own tab title, git-ignored)
+ui/branding.js
 *.tgz
 *.tar.gz
 *.db
