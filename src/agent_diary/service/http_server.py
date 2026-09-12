@@ -104,6 +104,7 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
