@@ -103,6 +103,7 @@ a { color: var(--accent); }
 .layout {
   display: grid;
   grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
   height: calc(100vh - 58px);
@@ -248,7 +249,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .import-inspector-body { padding: 6px 8px 8px; }
 .summary-title { flex: 1 1 auto; min-width: 0; }
 .summary-status { display: inline-block; flex: 0 0 auto; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
-.import-list { max-height: min(16vh, 130px); overflow-y: auto; padding-right: 4px; }
+.import-list { max-height: min(34vh, 320px); overflow-y: auto; padding-right: 4px; }
 
 /* ── Detail body (reading surface) ───────────────────── */
 #detailBody {
