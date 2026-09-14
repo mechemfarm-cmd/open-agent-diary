@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Diary</title>
     <script src="./branding.js"></script>
-    <link rel="stylesheet" href="./styles.css?v=20260913" />
+    <link rel="stylesheet" href="./styles.css?v=20260914" />
   </head>
   <body>
     <a class="skip-link" href="#detailBody">Skip to diary entry</a>
@@ -47,40 +47,33 @@
 
         <section class="panel panel-timeline" aria-labelledby="timelineHeading">
           <h2 id="timelineHeading">Timeline</h2>
-          <form id="browseScopeForm" class="browse-scope" aria-label="Timeline browse scope">
-            <div class="scope-field">
-              <label for="scopeConversationId">Conversation</label>
-              <input id="scopeConversationId" type="text" placeholder="telegram:713733361" />
+          <details class="filter-inspector" aria-label="Timeline filters">
+            <summary><span class="summary-title">Filters</span></summary>
+            <div class="filter-inspector-body">
+              <form id="browseScopeForm" class="browse-scope" aria-label="Timeline browse scope">
+                <div class="scope-field">
+                  <label for="scopeConversationId">Conversation</label>
+                  <input id="scopeConversationId" type="text" placeholder="telegram:713733361" />
+                </div>
+                <div class="scope-field">
+                  <label for="scopeImportId">Import</label>
+                  <input id="scopeImportId" type="text" placeholder="import-telegram-direct-..." />
+                </div>
+                <div class="scope-actions">
+                  <label class="scope-toggle">
+                    <input id="scopeTruthfulOnly" type="checkbox" />
+                    Truthful only
+                  </label>
+                  <button type="submit">Apply</button>
+                  <button id="clearScopeBtn" type="button">Clear</button>
+                </div>
+              </form>
             </div>
-            <div class="scope-field">
-              <label for="scopeImportId">Import</label>
-              <input id="scopeImportId" type="text" placeholder="import-telegram-direct-..." />
-            </div>
-            <div class="scope-actions">
-              <label class="scope-toggle">
-                <input id="scopeTruthfulOnly" type="checkbox" />
-                Truthful only
-              </label>
-              <button type="submit">Apply</button>
-              <button id="clearScopeBtn" type="button">Clear</button>
-            </div>
-          </form>
+          </details>
           <div class="panel-actions">
             <button id="prevPageBtn" aria-label="Previous timeline page">Prev</button>
             <button id="nextPageBtn" aria-label="Next timeline page">Next</button>
           </div>
-          <details class="import-inspector" aria-label="Recent import batches">
-            <summary id="importsHeading">
-              <span class="summary-title">Recent Imports</span>
-              <span id="importsStatus" class="summary-status" role="status" aria-live="polite"></span>
-            </summary>
-            <div class="import-inspector-body">
-              <div class="panel-actions compact-actions">
-                <button id="refreshImportsBtn" type="button" aria-label="Refresh import batches" title="Refresh import batches">↻</button>
-              </div>
-              <ul id="importsList" class="list import-list" role="list" aria-label="Recent import batches"></ul>
-            </div>
-          </details>
           <p id="timelineStatus" class="status-line" role="status" aria-live="polite"></p>
           <ul id="timelineList" class="list scroll-list" role="list" aria-label="Diary timeline entries"></ul>
         </section>
@@ -94,6 +87,18 @@
         <div id="graphView" class="graph-view" hidden aria-label="Knowledge graph view"></div>
         <article id="detailBody" class="raw-body" tabindex="-1">Select an entry to view raw detail.</article>
         <div id="artifactStatusBar" class="artifact-status-bar" aria-label="Artifact status" aria-live="polite"></div>
+        <details class="import-inspector" aria-label="Recent import batches">
+          <summary id="importsHeading">
+            <span class="summary-title">Recent Imports</span>
+            <span id="importsStatus" class="summary-status" role="status" aria-live="polite"></span>
+          </summary>
+          <div class="import-inspector-body">
+            <div class="panel-actions compact-actions">
+              <button id="refreshImportsBtn" type="button" aria-label="Refresh import batches" title="Refresh import batches">↻</button>
+            </div>
+            <ul id="importsList" class="list import-list" role="list" aria-label="Recent import batches"></ul>
+          </div>
+        </details>
       </section>
 
       <aside class="panel panel-interpretation" role="complementary" aria-label="Derived interpretation and annotations">

@@ -130,8 +130,8 @@ a { color: var(--accent); }
 
 .panel-detail {
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   overflow: hidden;
 }
@@ -147,7 +147,7 @@ a { color: var(--accent); }
 }
 .panel-search {
   flex: 0 0 auto;
-  max-height: 45vh;
+  max-height: 26vh;
 }
 .panel-search h2 { margin: 0 0 8px; font-size: 1rem; text-align: left; }
 
@@ -241,12 +241,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .panel-actions { display: flex; gap: 8px; margin-bottom: 6px; }
 .compact-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 
-/* ── Import inspector ────────────────────────────────── */
-.import-inspector { border: 1px solid var(--border); border-radius: 10px; padding: 0; margin-bottom: 6px; background: var(--surface-2); }
-.import-inspector summary { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: pointer; padding: 7px 10px; font-size: 0.8rem; color: var(--text); }
-.import-inspector summary::-webkit-details-marker { display: none; }
-.import-inspector[open] summary { border-bottom: 1px solid var(--border); }
-.import-inspector-body { padding: 6px 8px 8px; }
+/* ── Import inspector + timeline filters ──────────────── */
+.import-inspector, .filter-inspector { border: 1px solid var(--border); border-radius: 10px; padding: 0; margin-bottom: 6px; background: var(--surface-2); }
+.import-inspector summary, .filter-inspector summary { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: pointer; padding: 7px 10px; font-size: 0.8rem; color: var(--text); }
+.import-inspector summary::-webkit-details-marker, .filter-inspector summary::-webkit-details-marker { display: none; }
+.import-inspector[open] summary, .filter-inspector[open] summary { border-bottom: 1px solid var(--border); }
+.import-inspector-body, .filter-inspector-body { padding: 6px 8px 8px; }
 .summary-title { flex: 1 1 auto; min-width: 0; }
 .summary-status { display: inline-block; flex: 0 0 auto; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
 .import-list { max-height: min(34vh, 320px); overflow-y: auto; padding-right: 4px; }
@@ -255,6 +255,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #detailBody {
   width: 100%; max-width: none; min-height: 0; margin: 0;
   padding: 18px 20px; line-height: 1.7;
+  flex: 1 1 auto;
 }
 .raw-body {
   white-space: pre-wrap; line-height: 1.75; font-size: 1.05rem;
