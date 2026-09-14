@@ -147,7 +147,7 @@ a { color: var(--accent); }
 }
 .panel-search {
   flex: 0 0 auto;
-  max-height: 26vh;
+  max-height: 35vh;
 }
 .panel-search h2 { margin: 0 0 8px; font-size: 1rem; text-align: left; }
 
