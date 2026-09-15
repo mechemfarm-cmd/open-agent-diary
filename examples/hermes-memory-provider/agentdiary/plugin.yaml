@@ -1,0 +1,7 @@
+name: agentdiary
+version: 1.0.0
+description: "Agent Diary — local permanent memory and work-trace store (http://127.0.0.1:8041)."
+pip_dependencies: []
+requires_env: []
+hooks:
+  - on_memory_write
