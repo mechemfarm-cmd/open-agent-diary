@@ -14,6 +14,9 @@ from agent_diary.analytics.common import collect_source_rows, entry_has_active_a
 from agent_diary.analytics.conversation_briefs import build_conversation_brief_text
 from agent_diary.analytics.compressed_memory import build_compressed_memory_text
 from agent_diary.analytics.open_loops import build_open_loops_payload
+from agent_diary.analytics.ranking import rank as rank_beliefs, render_selection
+from agent_diary.index.belief_repository import load_candidates
+from agent_diary.index.belief_usage import credit_from_new_evidence, record_surface
 from agent_diary.config import Paths
 from agent_diary.index.repository import (
     get_entry_row,
@@ -1544,6 +1547,109 @@ def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
         },
         "note": "Search merges derived compressed-memory hits with authoritative raw-entry matches and ranks them per entry.",
     }
+
+
+# ── belief recall (evidential belief layer) ─────────────────────────────────
+#
+# Separate from search_memory on purpose. search_memory answers "which diary
+# ENTRIES match this text?"; belief recall answers "which graph FACTS deserve
+# attention?". Two different questions, so two routes rather than one overloaded
+# one.
+
+
+#: Bounds on a single recall. Without them a caller could pass an enormous limit
+#: or char_budget and turn one prefetch into a full-corpus render. These cap the
+#: OUTPUT; the scan itself still reads every current fact, which remains a known
+#: scaling cost recorded in the plan.
+MAX_RECALL_LIMIT = 50
+MAX_RECALL_CHAR_BUDGET = 4000
+
+
+def recall_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Recall the highest-value knowledge the graph currently holds.
+
+    **Query-agnostic in v1.** Selection is salience — confidence x strength x
+    outstanding attention — not relevance to the caller's query. Query-aware
+    belief selection is future work. A hastily bolted-on text matcher here would
+    be a third recall mechanism, and half-mechanisms are what keep forcing rework
+    on this layer.
+
+    **Surfacing spends.** Facts appearing in the returned block are charged one
+    unit of attention, so knowledge that keeps being shown without ever being
+    acted on yields its place to knowledge that has not had its turn. Facts
+    selected but cut by the character budget are NOT charged: they were never
+    shown, and billing them would penalise exactly the facts that never got
+    their turn.
+
+    Facts with no stored belief score zero and therefore never appear. That is
+    the intended default for something nothing has evaluated yet.
+    """
+    payload = payload or {}
+    limit = int(payload.get("limit", 8))
+    char_budget = int(payload.get("char_budget", 900))
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    if char_budget < 1:
+        raise ValueError("char_budget must be >= 1")
+
+    if limit > MAX_RECALL_LIMIT:
+        raise ValueError(f"limit must be <= {MAX_RECALL_LIMIT}")
+    if char_budget > MAX_RECALL_CHAR_BUDGET:
+        raise ValueError(f"char_budget must be <= {MAX_RECALL_CHAR_BUDGET}")
+
+    candidates = load_candidates(paths.sqlite_path)
+    selected = rank_beliefs(candidates, limit=limit)
+    block, shown_ids = render_selection(selected, char_budget=char_budget)
+
+    by_id = {cand.fact_id: (cand, score) for cand, score in selected}
+    surfaced = record_surface(paths.sqlite_path, shown_ids) if shown_ids else 0
+
+    return {
+        "block": block,
+        "considered": len(candidates),
+        "selected": len(selected),
+        "surfaced": surfaced,
+        "facts": [
+            {
+                "fact_id": fid,
+                "statement": by_id[fid][0].statement,
+                "provenance": by_id[fid][0].provenance,
+                "strength": by_id[fid][0].strength,
+                "confidence": by_id[fid][0].confidence,
+                "provisional": by_id[fid][0].provisional,
+                "score": round(by_id[fid][1], 6),
+            }
+            for fid in shown_ids
+        ],
+        "note": (
+            "Facts selected by belief salience, not by text relevance to a query. "
+            "Facts in the returned block have each been charged one unit of "
+            "surfacing; those cut by the character budget have not."
+        ),
+    }
+
+
+def credit_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Signal A: credit facts that were surfaced and then corroborated.
+
+    Exposed as a route but DELIBERATELY NOT auto-hooked into the extraction
+    pipeline yet. Crediting requires knowing a claim's provenance, and provenance
+    currently attaches at the entry level rather than the extracted-claim level —
+    a human entry containing pasted tool output still classifies as human. Wiring
+    credit in now would bake that known-wrong attribution into the ranking, which
+    is worse than leaving the loop half-open.
+
+    ``evidence`` is a list of ``{"fact_id", "observed_at", "provenance"}``.
+    ``belief_usage.credit_from_new_evidence`` enforces the three requirements
+    itself: newer than the surface, outstanding pressure to clear, and
+    provenance that is not agent-produced, inferred or unknown.
+    """
+    payload = payload or {}
+    evidence = payload.get("evidence") or []
+    if not isinstance(evidence, list):
+        raise ValueError("evidence must be a list")
+    credited = credit_from_new_evidence(paths.sqlite_path, evidence)
+    return {"credited": credited, "count": len(credited)}
 
 
 def fetch_raw_entry(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:

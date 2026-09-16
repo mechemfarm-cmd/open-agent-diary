@@ -908,6 +908,25 @@ class AppendEntrySliceTests(unittest.TestCase):
         self.assertIn("memory_fts_count", check_names)
         self.assertIn("work_trace_fts_count", check_names)
 
+    def test_doctor_missing_database_returns_the_full_summary_shape(self) -> None:
+        """The missing-database early return must publish the same summary keys
+        as the full path. It once returned only `issue_count`, so a caller
+        reading `error_count` — the CLI exit status among them — saw zero errors
+        while the issues list held ten."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        from agent_diary.config import default_paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run_doctor(default_paths(_Path(tmp)))
+
+        self.assertFalse(out["ok"])
+        self.assertGreater(out["summary"]["error_count"], 0)
+        self.assertEqual(out["summary"]["issue_count"], len(out["issues"]))
+        for key in ("entry_count", "work_trace_count", "error_count", "warning_count"):
+            self.assertIn(key, out["summary"])
+
     def test_doctor_reports_missing_raw_entry_file(self) -> None:
         entry = append_entry(
             self.paths,

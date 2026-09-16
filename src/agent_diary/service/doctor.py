@@ -77,7 +77,28 @@ def run_doctor(paths: Paths, *, max_issues: int = 100) -> dict[str, Any]:
     if not paths.sqlite_path.exists():
         checks.append({"name": "sqlite_database", "ok": False, "path": str(paths.sqlite_path)})
         _limited_append(issues, {"severity": "error", "code": "missing_sqlite_database", "path": str(paths.sqlite_path)}, max_issues)
-        return {"ok": False, "summary": {"issue_count": len(issues)}, "checks": checks, "issues": issues}
+        # Publish the SAME summary shape as the full path below. Returning only
+        # `issue_count` here meant a caller reading `error_count` — the CLI's
+        # exit status, for one — saw zero errors while a page of them was
+        # listed, so a broken store reported itself healthy.
+        return {
+            "ok": False,
+            "summary": {
+                "entry_count": 0,
+                "work_trace_count": 0,
+                "artifact_count": 0,
+                "memory_index_count": 0,
+                "issue_count": len(issues),
+                "archived_entry_count": 0,
+                "archive_count": 0,
+                "archive_candidate_month_count": 0,
+                "error_count": sum(1 for issue in issues if issue.get("severity") == "error"),
+                "warning_count": sum(1 for issue in issues if issue.get("severity") == "warning"),
+                "issues_truncated": len(issues) >= max_issues,
+            },
+            "checks": checks,
+            "issues": issues,
+        }
 
     with closing(connect_sqlite(paths.sqlite_path)) as conn:
         conn.row_factory = sqlite3.Row

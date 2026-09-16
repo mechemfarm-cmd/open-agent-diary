@@ -19,6 +19,7 @@ from agent_diary.cli.openclaw_work_trace_import import (
 from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_session_export, build_openclaw_telegram_direct_transcript
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
+from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
     append_overlay,
@@ -68,6 +69,56 @@ def _print(output: dict, as_json: bool) -> None:
         print(json.dumps(output, indent=2))
     else:
         print(output)
+
+
+def _format_doctor_report(report: dict, paths: Any) -> str:
+    """Human-readable doctor output.
+
+    Other commands fall back to printing their dict, which is fine for one-line
+    acknowledgements but useless for a health check. Errors and warnings are
+    listed with a location; passing checks are named only, so a healthy run
+    stays short and a broken one points at the file.
+    """
+    summary = report.get("summary", {})
+    lines = [
+        "Agent Diary doctor — read-only",
+        f"  data root      {paths.data_root}",
+        f"  entries        {summary.get('entry_count', 0)}",
+        f"  work traces    {summary.get('work_trace_count', 0)}",
+        f"  artifacts      {summary.get('artifact_count', 0)}",
+        f"  memory index   {summary.get('memory_index_count', 0)}",
+        f"  archived       {summary.get('archived_entry_count', 0)} entr(ies) in "
+        f"{summary.get('archive_count', 0)} archive(s)",
+        "",
+        "  checks",
+    ]
+    for check in report.get("checks", []):
+        lines.append(f"    {'ok  ' if check.get('ok') else 'FAIL'}  {check.get('name', '?')}")
+
+    issues = report.get("issues", [])
+    if issues:
+        lines.append("")
+        lines.append("  issues")
+        for issue in issues[:25]:
+            where = (
+                issue.get("path")
+                or issue.get("table")
+                or issue.get("entry_id")
+                or issue.get("event_id")
+                or ""
+            )
+            lines.append(
+                f"    {issue.get('severity', '?'):7} {issue.get('code', '?')}  {where}".rstrip()
+            )
+        if len(issues) > 25:
+            lines.append(f"    ... {len(issues) - 25} more (use --json for the full list)")
+
+    lines.extend([
+        "",
+        f"  {summary.get('error_count', 0)} error(s), {summary.get('warning_count', 0)} warning(s)"
+        f" -> {'healthy' if report.get('ok') else 'problems found'}",
+    ])
+    return "\n".join(lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -388,6 +439,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8041)
 
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="read-only consistency check of the data store (exits 1 when it finds errors)",
+    )
+    p_doctor.add_argument("--max-issues", type=int, default=100)
+
     # ── Knowledge Graph subcommands ─────────────────────────────────
 
     p_gfe = sub.add_parser("graph-find-entity")
@@ -560,6 +617,21 @@ def main() -> None:
         )
 
     paths = default_paths()
+
+    if args.command == "doctor":
+        # Dispatched BEFORE ensure_data_dirs/bootstrap_sqlite on purpose. This
+        # command exists to report missing directories and a missing database,
+        # and both of those calls would create exactly what it is meant to
+        # detect — a doctor that heals the patient before examining it.
+        report = run_doctor(paths, max_issues=args.max_issues)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print(_format_doctor_report(report, paths))
+        if report.get("summary", {}).get("error_count"):
+            raise SystemExit(1)
+        return
+
     ensure_data_dirs(paths)
     bootstrap_sqlite(paths.sqlite_path)
 

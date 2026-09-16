@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 from http import HTTPStatus
 from urllib.parse import urlparse
@@ -12,6 +13,8 @@ from agent_diary.config import Paths
 from agent_diary.service import handlers
 
 RouteFn = Callable[[Paths, dict[str, Any]], dict[str, Any]]
+
+logger = logging.getLogger(__name__)
 
 
 class AgentDiaryHandler(BaseHTTPRequestHandler):
@@ -27,6 +30,9 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         "/produce_conversation_briefs": handlers.produce_conversation_briefs,
         "/produce_compressed_memory": handlers.produce_compressed_memory,
         "/search_memory": handlers.search_memory,
+        # ── Evidential belief layer routes ──
+        "/recall_beliefs": handlers.recall_beliefs,
+        "/credit_beliefs": handlers.credit_beliefs,
         "/search_all": handlers.search_all,
         "/search_work_trace": handlers.search_work_trace,
         "/list_imports": handlers.list_imports,
@@ -191,8 +197,16 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "result": result})
         except FileNotFoundError:
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": {"code": "not_found", "message": "requested record was not found"}})
+        except ValueError as exc:
+            # Validation messages are written by this codebase for callers, so
+            # returning them is safe — and it is the difference between "your
+            # payload was wrong" and "the server is broken". Collapsing both into
+            # one code made a bad request and a database lock timeout look
+            # identical to the plugin that now depends on these routes.
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": {"code": "invalid_request", "message": str(exc)}})
         except Exception:  # keep internal paths/details out of HTTP responses
-            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": {"code": "request_failed", "message": "request could not be processed"}})
+            logger.exception("unhandled error handling %s", self.path)
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": {"code": "internal_error", "message": "request could not be processed"}})
 
 
 class AgentDiaryHTTPServer(ThreadingHTTPServer):
