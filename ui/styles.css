@@ -403,3 +403,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .dialogue-turn { transition: border-color 120ms ease; }
   .dialogue-turn:hover { border-color: var(--accent); }
 }
+
+/* ── Knowledge by belief ─────────────────────────────── */
+.belief-item { display: flex; flex-direction: column; gap: 4px; }
+.belief-statement { line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; }
+/* Higher specificity than `.item button`, which makes every item button
+   full-width and transparent — this one must stay a small pill. */
+.belief-item .belief-confirm {
+  width: auto; align-self: flex-start; text-align: center;
+  padding: 2px 10px; font-size: 0.78rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-2); color: var(--muted);
+}
+.belief-item .belief-confirm:hover:not(:disabled) { border-color: var(--accent); color: inherit; }
+.belief-item .belief-confirm:disabled { opacity: 0.55; cursor: default; }

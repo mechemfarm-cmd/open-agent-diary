@@ -33,6 +33,8 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         # ── Evidential belief layer routes ──
         "/recall_beliefs": handlers.recall_beliefs,
         "/credit_beliefs": handlers.credit_beliefs,
+        "/list_beliefs": handlers.list_beliefs,
+        "/confirm_beliefs": handlers.confirm_beliefs,
         "/search_all": handlers.search_all,
         "/search_work_trace": handlers.search_work_trace,
         "/list_imports": handlers.list_imports,

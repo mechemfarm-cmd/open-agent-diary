@@ -19,7 +19,12 @@ from agent_diary.config import Paths as PathsType
 from agent_diary.index.belief_usage import get_usage, record_surface
 from agent_diary.index.graph_repository import insert_entity, insert_evidence, insert_fact
 from agent_diary.index.sqlite_index import bootstrap_sqlite
-from agent_diary.service.handlers import credit_beliefs, recall_beliefs
+from agent_diary.service.handlers import (
+    confirm_beliefs,
+    credit_beliefs,
+    list_beliefs,
+    recall_beliefs,
+)
 
 T1 = "2026-09-15T10:00:00+00:00"
 T2 = "2026-09-15T11:00:00+00:00"
@@ -213,6 +218,82 @@ class TestBeliefRecallRoute(unittest.TestCase):
 
     def test_credit_route_handles_missing_evidence(self):
         self.assertEqual(credit_beliefs(self.paths, {})["count"], 0)
+
+
+# ── list_beliefs : inspection must not cost anything ────────────────────
+    def test_list_beliefs_never_spends(self):
+        # The entire reason this exists separately from recall_beliefs: a UI
+        # panel built on the recall route would charge attention for every fact
+        # it displays, decaying the facts it exists to show.
+        self._seed("Listed", 0.9)
+        out = list_beliefs(self.paths, {})
+        self.assertGreater(len(out["facts"]), 0)
+        for fact in out["facts"]:
+            with self.subTest(fid=fact["fact_id"]):
+                self.assertEqual(get_usage(self.db, fact["fact_id"])["surfaced_count"], 0)
+
+    def test_list_beliefs_reports_the_ranking_with_its_numbers(self):
+        self._seed("Lower", 0.2)
+        high = self._seed("Higher", 0.9)
+        out = list_beliefs(self.paths, {"limit": 1})
+        self.assertEqual(out["facts"][0]["fact_id"], high)
+        fact = out["facts"][0]
+        self.assertIn("score", fact)
+        self.assertIn("confidence", fact)
+        self.assertIn("provenance", fact)
+        self.assertIn("outstanding", fact)
+
+    def test_list_beliefs_respects_limit_and_caps(self):
+        for i in range(5):
+            self._seed(f"Cap{i}", 0.5)
+        self.assertLessEqual(len(list_beliefs(self.paths, {"limit": 2})["facts"]), 2)
+        with self.assertRaises(ValueError):
+            list_beliefs(self.paths, {"limit": 0})
+        with self.assertRaises(ValueError):
+            list_beliefs(self.paths, {"limit": 9999})
+
+    def test_list_beliefs_on_an_empty_graph(self):
+        out = list_beliefs(self.paths, {})
+        self.assertEqual(out["facts"], [])
+        self.assertEqual(out["considered"], 0)
+
+    def test_list_beliefs_omits_facts_with_no_computed_belief(self):
+        self._seed("Unjudged", 0.0, with_belief=False)
+        self.assertEqual(list_beliefs(self.paths, {})["facts"], [])
+
+    # ── confirm_beliefs : Signal C ──────────────────────────────────────────
+    def test_confirm_pays_the_debt_down_by_one(self):
+        fid = self._seed("Confirmed", 0.9)
+        record_surface(self.db, [fid], when=T1)
+        record_surface(self.db, [fid], when=T1)
+        out = confirm_beliefs(self.paths, {"fact_ids": [fid]})
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(get_usage(self.db, fid)["surfaced_since_credit"], 1)
+
+    def test_confirming_improves_a_facts_standing(self):
+        fid = self._seed("Standing", 0.9)
+        for _ in range(10):
+            record_surface(self.db, [fid], when=T1)
+        before = list_beliefs(self.paths, {})["facts"][0]["score"]
+        confirm_beliefs(self.paths, {"fact_ids": [fid]})
+        after = list_beliefs(self.paths, {})["facts"][0]["score"]
+        self.assertGreater(after, before)
+
+    def test_confirm_cannot_push_pressure_negative(self):
+        fid = self._seed("Untouched", 0.9)
+        confirm_beliefs(self.paths, {"fact_ids": [fid]})
+        confirm_beliefs(self.paths, {"fact_ids": [fid]})
+        self.assertEqual(get_usage(self.db, fid)["surfaced_since_credit"], 0)
+
+    def test_confirm_rejects_a_non_list(self):
+        with self.assertRaises(ValueError):
+            confirm_beliefs(self.paths, {"fact_ids": "nope"})
+
+    def test_confirm_with_no_ids_is_safe(self):
+        self.assertEqual(confirm_beliefs(self.paths, {})["count"], 0)
+
+    def test_confirm_ignores_unknown_fact_ids(self):
+        self.assertEqual(confirm_beliefs(self.paths, {"fact_ids": ["ghost"]})["count"], 0)
 
 
 if __name__ == "__main__":

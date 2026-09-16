@@ -55,6 +55,9 @@ const overlayAuthorInput = document.getElementById("overlayAuthor");
 const overlayContentInput = document.getElementById("overlayContent");
 const overlayStatus = document.getElementById("overlayStatus");
 const refreshDerivedDetails = document.getElementById("refreshDerivedDetails");
+const beliefDetails = document.getElementById("beliefDetails");
+const beliefList = document.getElementById("beliefList");
+const beliefStatus = document.getElementById("beliefStatus");
 const refreshOpenLoopsBtn = document.getElementById("refreshOpenLoopsBtn");
 const refreshBriefsBtn = document.getElementById("refreshBriefsBtn");
 const refreshMemoryBtn = document.getElementById("refreshMemoryBtn");
@@ -1139,6 +1142,82 @@ function wireListKeyboardNav(listEl) {
   }
 }
 
+/**
+ * Read-only belief ranking. Must never call /recall_beliefs: that route SPENDS
+ * attention for every fact it returns, so a panel built on it would decay the
+ * very facts it is displaying just by being open.
+ */
+async function loadBeliefs() {
+  if (!beliefList) return;
+  beliefList.setAttribute("aria-busy", "true");
+  beliefStatus.textContent = "Loading...";
+  try {
+    const result = await post("/list_beliefs", { limit: 20 });
+    renderBeliefs(result.facts || []);
+    beliefStatus.textContent = `${result.returned || 0} of ${result.considered || 0} facts carry a belief.`;
+  } catch (err) {
+    showError(beliefList, `Beliefs unavailable: ${err.message}`);
+    beliefStatus.textContent = "Load failed";
+  }
+}
+
+function renderBeliefs(facts) {
+  beliefList.setAttribute("aria-busy", "false");
+  beliefList.innerHTML = "";
+  if (!facts.length) {
+    const li = document.createElement("li");
+    li.className = "item muted";
+    li.textContent = "No facts carry a computed belief yet. An empty graph is correct for a new instance.";
+    beliefList.appendChild(li);
+    return;
+  }
+  for (const fact of facts) {
+    const li = document.createElement("li");
+    li.className = "item belief-item";
+
+    const statement = document.createElement("div");
+    statement.className = "belief-statement";
+    statement.textContent = fact.statement;
+    li.appendChild(statement);
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    const parts = [
+      `score ${Number(fact.score || 0).toFixed(2)}`,
+      `confidence ${Number(fact.confidence || 0).toFixed(2)}`,
+      String(fact.provenance || "unknown"),
+    ];
+    if (fact.provisional) parts.push("provisional");
+    if (fact.outstanding) parts.push(`${fact.outstanding} unearned`);
+    meta.textContent = parts.join(" \u00b7 ");
+    li.appendChild(meta);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "belief-confirm";
+    btn.textContent = "Useful";
+    btn.title = "Pays down the attention spent surfacing this fact";
+    btn.addEventListener("click", () => confirmBelief(fact.fact_id, btn));
+    li.appendChild(btn);
+
+    beliefList.appendChild(li);
+  }
+}
+
+async function confirmBelief(factId, btn) {
+  btn.disabled = true;
+  try {
+    const result = await post("/confirm_beliefs", { fact_ids: [factId] });
+    beliefStatus.textContent = result.count
+      ? "Marked useful. Its attention debt is paid down."
+      : "Recorded, but that fact had no outstanding attention to pay down.";
+    await loadBeliefs();
+  } catch (err) {
+    beliefStatus.textContent = `Could not confirm: ${err.message}`;
+    btn.disabled = false;
+  }
+}
+
 async function loadTimeline() {
   timelineStatus.textContent = "Loading entries...";
   timelineList.setAttribute("aria-busy", "true");
@@ -1525,6 +1604,7 @@ async function init() {
   state.apiBase = apiBaseInput.value.trim().replace(/\/$/, "");
   renderScopeBar();
   await loadTimeline();
+  loadBeliefs();
   checkConnection();
   if (state.searchQuery) {
     await runSearch(state.searchQuery);

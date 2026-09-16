@@ -16,7 +16,7 @@ from agent_diary.analytics.compressed_memory import build_compressed_memory_text
 from agent_diary.analytics.open_loops import build_open_loops_payload
 from agent_diary.analytics.ranking import rank as rank_beliefs, render_selection
 from agent_diary.index.belief_repository import load_candidates
-from agent_diary.index.belief_usage import credit_from_new_evidence, record_surface
+from agent_diary.index.belief_usage import credit_from_new_evidence, record_acted_on, record_surface
 from agent_diary.config import Paths
 from agent_diary.index.repository import (
     get_entry_row,
@@ -1650,6 +1650,61 @@ def credit_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[
         raise ValueError("evidence must be a list")
     credited = credit_from_new_evidence(paths.sqlite_path, evidence)
     return {"credited": credited, "count": len(credited)}
+
+
+def list_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """READ-ONLY belief ranking, for inspection rather than recall.
+
+    Deliberately separate from ``recall_beliefs``, which SPENDS attention for
+    every fact it returns. A UI panel that showed the ranking by calling the
+    recall route would charge for all of it on every page load, decaying the very
+    facts it exists to display. Reading is not recalling, so this records nothing.
+    """
+    payload = payload or {}
+    limit = int(payload.get("limit", 20))
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    if limit > MAX_RECALL_LIMIT:
+        raise ValueError(f"limit must be <= {MAX_RECALL_LIMIT}")
+
+    candidates = load_candidates(paths.sqlite_path)
+    selected = rank_beliefs(candidates, limit=limit)
+    return {
+        "considered": len(candidates),
+        "returned": len(selected),
+        "facts": [
+            {
+                "fact_id": cand.fact_id,
+                "statement": cand.statement,
+                "provenance": cand.provenance,
+                "strength": cand.strength,
+                "confidence": cand.confidence,
+                "provisional": cand.provisional,
+                "score": round(score, 6),
+                "outstanding": cand.surfaced_since_credit,
+            }
+            for cand, score in selected
+        ],
+        "note": "Read-only. Nothing here has been charged for surfacing.",
+    }
+
+
+def confirm_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Signal C: a human says a fact was useful, so it earns its attention back.
+
+    The only earn signal that comes from the person directly rather than being
+    inferred from evidence — which is why it is worth a surface of its own. It
+    decrements outstanding pressure 1:1, identically to corroboration, and can
+    never lift a fact above one that has not been surfaced.
+    """
+    payload = payload or {}
+    fact_ids = payload.get("fact_ids")
+    if fact_ids is None:
+        fact_ids = []
+    if not isinstance(fact_ids, list):
+        raise ValueError("fact_ids must be a list")
+    touched = record_acted_on(paths.sqlite_path, fact_ids)
+    return {"count": touched, "requested": len(fact_ids)}
 
 
 def fetch_raw_entry(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
