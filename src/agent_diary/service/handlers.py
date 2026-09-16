@@ -2646,11 +2646,22 @@ def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, 
         return {"job_id": job_id, "status": "no_facts", "summary": result.get("reason", "")}
 
     # Validate source exists for raw_entry types
+    author_role: str | None = None
     if source_kind == "raw_entry":
         from agent_diary.index.repository import get_entry_row
         entry_row = get_entry_row(paths.sqlite_path, source_id)
         if not entry_row:
             raise ValueError(f"source entry not found: {source_id}")
+        author_role = entry_row["author_role"]
+
+    # Signal A provenance, resolved ONCE for the whole job. Evidence may only
+    # earn credit when it is independent of the agent's own output; crediting
+    # agent narration would let the system reward itself for restating what it
+    # had just been shown. Classified by SOURCE, never by predicate, so the rule
+    # stays portable to another deployment's vocabulary.
+    from agent_diary.analytics.signal_policy import DEFAULT_POLICY
+    source_provenance = DEFAULT_POLICY.class_for(source_kind, author_role)
+    credit_candidates: list[dict[str, Any]] = []
 
     # Process proposed entities and facts
     from agent_diary.index.graph_repository import (
@@ -2741,6 +2752,21 @@ def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, 
                 extractor_version=result.get("extractor_version"),
             )
             insert_evidence(paths.sqlite_path, ev)
+            # Signal A: fresh evidence for a fact that ALREADY exists and may
+            # already have been surfaced. Corroboration arriving after the
+            # system spent attention is the one honest earn signal — it needs no
+            # inspection of agent output, so nothing here is circular.
+            # credit_from_new_evidence still applies every rule: outstanding
+            # pressure to clear, genuinely newer than the surface and the last
+            # credit, and provenance that is not agent-produced, inferred or
+            # unknown. A fact that was never surfaced earns nothing, because new
+            # evidence for it is ordinary accumulation rather than a return on
+            # attention already spent.
+            credit_candidates.append({
+                "fact_id": existing_current[0]["fact_id"],
+                "observed_at": fact_timestamp or source_timestamp,
+                "provenance": source_provenance,
+            })
             facts_skipped_dedup += 1
             continue
 
@@ -2781,13 +2807,17 @@ def graph_submit_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, 
         )
         insert_evidence(paths.sqlite_path, ev)
 
+    credited = credit_from_new_evidence(paths.sqlite_path, credit_candidates)
+
     if facts_skipped_dedup:
         summary = f"created {entities_created} entities, {facts_created} facts, {facts_skipped_dedup} deduped"
     else:
         summary = f"created {entities_created} entities, {facts_created} facts"
+    if credited:
+        summary = f"{summary}, {len(credited)} credited"
 
     update_extraction_job(paths.sqlite_path, job_id, status, result_summary=summary)
-    return {"job_id": job_id, "status": status, "summary": summary}
+    return {"job_id": job_id, "status": status, "summary": summary, "credited": credited}
 
 
 def graph_fail_extraction(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
