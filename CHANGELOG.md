@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- Reframed the project as early, working open-source software: useful today, actively evolving, and explicit about privacy, backup, and operational limits.
+- Added first-run, operating, import-pipeline, knowledge-graph, belief-layer, MCP, CLI, and API documentation.
+- Documented the graph enqueue-and-drain requirement so a new installation cannot mistake a growing extraction queue for a working graph.
+- Documented the belief UI and recall side effects; clarified that belief ranking is derived, provisional where appropriate, and not yet validated by long-term use.
+- Corrected stale CLI examples for global `--json` and `produce-conversation-briefs`.
+
+
 All notable changes to Open Agent Diary will be documented here.
 
 ## 0.1.0 - public repo candidate

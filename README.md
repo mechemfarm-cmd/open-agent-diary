@@ -1,26 +1,26 @@
 # Open Agent Diary
 
-**Your AI agent talks to you every day. Does it remember what it learned?**
+> **Early, working open-source software.** Open Agent Diary is useful today, local-first, and actively evolving. Install it if you are comfortable keeping backups, seeing workflows change, and reporting what is unclear or broken.
 
-Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration. It gives your AI agent durable recall across sessions — and **gives you** the transparency to see exactly what it remembers, where that memory came from, and correct it when it's wrong.
+**Your AI agent talks to you every day. Does it remember what it learned — and can you inspect why?**
+
+Open Agent Diary is a local-first, inspectable memory and work-trace store for human/agent collaboration. It keeps raw conversation records, agent work evidence, and derived recall layers in one place so an agent can remember across sessions without turning memory into an uninspectable black box.
 
 ![Open Agent Diary demo](docs/demo.gif)
 
-The app is built around a simple loop:
-
-1. **Search or browse** for something your agent worked on.
-2. **Read the source record** — the actual conversation, not a summary.
-3. **Correct or inspect** the generated layers (memory, summaries, follow-ups) that your agent relies on.
-
-The core rule: **generated memory is never the hidden source of truth.** Everything an agent knows can be traced back to a raw entry you can inspect.
+The rule that matters: **raw entries are authoritative.** Summaries, graph facts, and belief rankings are derived support layers. Every useful claim should lead back to source records you can inspect.
 
 ## Who is this for?
 
-- **Hermes / Claude Code / AI agent users** who want persistent recall across sessions
-- **Developers** who want transparent, explainable agent memory — not a black box
-- **Anyone** who's tired of their assistant forgetting things between conversations
+- People using Hermes, Claude Code, or another autonomous agent who want durable local recall.
+- Developers who want an inspectable memory system rather than a hosted black box.
+- Early users willing to work with a v0.1 project and give useful feedback.
+
+Wait if you need a hosted service, a finished one-click desktop application, or network-exposed authenticated multi-user storage. This project is none of those yet.
 
 ## Quick start
+
+Run commands from the directory that should own the diary data. In v0.1, runtime data lives in **`<current working directory>/data`**.
 
 ```bash
 python3 -m venv .venv
@@ -29,83 +29,74 @@ pip install -e .
 agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
-On Debian/Ubuntu, install `python3-venv` first if `python3 -m venv` says `ensurepip` is unavailable.
+Open <http://127.0.0.1:8041>.
 
-Then open:
+### Try it with synthetic data
 
-```text
-http://127.0.0.1:8041
-```
-
-## Try it with synthetic sample data
-
-The repository ships with invented demo data only. Import it after starting your virtualenv:
+Open a second terminal in the same repository and virtual environment:
 
 ```bash
-agent-diary import-session-jsonl --path examples/synthetic-session-import.jsonl --import-id demo
-agent-diary produce-conversation-briefs --import-id demo --force
-agent-diary produce-compressed-memory --import-id demo --force
-agent-diary produce-open-loops --import-id demo
-agent-diary search-memory --query "release checklist" --json
-agent-diary doctor --json
+agent-diary import-session-and-analyze \
+  --path examples/synthetic-session-import.jsonl \
+  --import-id demo
+agent-diary --json search-memory --query "release checklist"
+agent-diary doctor
 ```
 
-## What is included
+The repository contains invented fixtures only. A new real installation starts empty by design; an empty timeline, graph, or belief list is not an error.
 
-- **Browser UI** — search, browse, read, and annotate entries
-- **CLI tools** — import sessions, produce memory artifacts, consistency checks
-- **REST API** — query memory, work traces, and raw entries programmatically
-- **Append-only raw store** — entries cannot be silently modified, only annotated
-- **SQLite + FTS5** — fast full-text search across memory and work traces
-- **Generated artifacts** — conversation briefs, compressed memory, open loops
-- **Monthly archives** — automatic rotation of old raw entries
-- **MCP server** — integrate directly with Claude Desktop and other MCP-compatible agents
+## What you get
 
-## Project layout
+- **Raw entries** — append-only conversation/source records you can browse and inspect.
+- **Work traces** — evidence of what an agent did between visible messages.
+- **Derived artifacts** — briefs, compressed recall, and open loops; useful but never the source of truth.
+- **Optional knowledge graph** — entities, facts, evidence, aliases, corrections, and source links.
+- **Optional belief ranking** — a careful ranking over derived graph facts, with provenance and usefulness signals.
+- **Browser UI, CLI, REST API, and MCP server** — choose the integration level that fits your agent.
+- **`agent-diary doctor`** — a read-only consistency check for local storage.
 
-| Path | Purpose |
-|---|---|
-| `src/agent_diary/` | Python backend, CLI, indexing, storage, producers |
-| `ui/` | Static browser UI served by the backend |
-| `tests/` | Backend regression tests |
-| `examples/` | Synthetic JSONL fixtures for demo/import testing |
-| `docs/` | Integration and design documentation |
+## Choose an integration level
 
-Runtime data is created under `data/` when you run the app. That directory is ignored by Git.
+1. **Archive and API** — import JSONL and search/browse locally. Start with [Getting started](docs/getting-started.md).
+2. **MCP tools** — connect an MCP-compatible agent to search and inspect the diary. See [MCP setup](docs/mcp.md).
+3. **Hermes primary memory** — pre-turn recall plus mirrored memory writes. See [Hermes primary memory](examples/hermes-memory-provider/README.md).
 
-## For agents
+Installing the server alone creates an archive. The provider/plugin integration is what makes recall automatic for an agent.
 
-Start with:
+## Optional: knowledge graph and belief layer
 
-- `AGENTS.md`
-- `docs/agent-integration.md`
-- `agent-diary-mcp.py` — MCP server for direct Claude Desktop integration
+The graph is built from imported source entries; it is not seeded. Its pipeline has two required halves: **enqueue extraction jobs, then drain them with an extractor**. A queue that only grows is a stalled graph, not progress.
 
-The intended recall flow is:
+The belief layer ranks derived facts but does not replace raw records. On a new installation it has no history and should be empty. Its ranking needs real use over time; it is not yet a claim of proven “better memory.”
 
-1. Query `/search_memory` for cross-session memory.
-2. Query `/search_work_trace` for evidence of what happened.
-3. Fetch raw entries or work traces when details matter.
-4. Let the human inspect and correct the record through the UI annotation/correction layer.
+- [Knowledge graph and extraction](docs/knowledge-graph.md)
+- [Belief layer semantics](docs/belief-layer.md)
 
-## Privacy model
+## Privacy and safety
 
-Open Agent Diary is designed so each installation gathers **your own data locally**. The public repository contains only code, docs, tests, and synthetic fixtures.
+By default the server binds to `127.0.0.1`. Your data stays in the local data directory you chose. The current v0.1 API has unauthenticated write routes, so bind to a LAN/Tailscale/private interface only when you understand the exposure and have appropriate network controls.
 
-By default the server binds to `127.0.0.1`, meaning only the current machine can reach it. If you choose to bind to a LAN/Tailscale/private-network address, do that only on a trusted network and understand that the current v0.1 API has unauthenticated write routes.
+Read the [privacy model](docs/privacy-model.md) before exposing the service beyond loopback. Keep backups before upgrades or experiments.
+
+## Documentation
+
+- [Getting started](docs/getting-started.md) — first run, demo, data root, and first-run expectations
+- [Operating guide](docs/operating-guide.md) — daily use, health checks, backups, and troubleshooting
+- [Agent integration](docs/agent-integration.md) — generic agent contract and recall protocol
+- [Import pipelines](docs/import-pipelines.md) — canonical JSONL plus integration patterns
+- [Knowledge graph](docs/knowledge-graph.md) and [belief layer](docs/belief-layer.md)
+- [MCP setup](docs/mcp.md)
+- [CLI reference](docs/cli-reference.md) and [API reference](docs/api-reference.md)
+- [Release readiness](docs/release-readiness.md) — supported v0.1 shape and deliberate limits
 
 ## Development checks
 
 ```bash
-PYTHONPATH=src python3 -m unittest -v tests.test_append_entry_slice
+PYTHONPATH=src python3 -m unittest discover -s tests -q
 PYTHONPATH=src python3 -m compileall -q src scripts tests
-PYTHONPATH=src python3 -m agent_diary.cli.main --json doctor
+agent-diary doctor
 ```
-
-## Author
-
-Created by Willard Mechem.
 
 ## License
 
-MIT License. See `LICENSE`.
+MIT License. See [LICENSE](LICENSE).
