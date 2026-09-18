@@ -40,7 +40,7 @@ agent-diary graph-queue-status
 agent-diary graph-backfill-status
 ```
 
-Extraction calls an OpenAI-compatible model through OpenRouter by default. It is optional and may incur external-model cost. Supply the key only in your local secret environment, never in docs or command history shared publicly:
+Extraction calls an OpenAI-compatible model through OpenRouter by default. **This sends the selected source-entry text (up to the extractor request limit) to that external provider** so it can propose entities and facts. It is optional and may incur both an external-model cost and a data-sharing trade. Do not enable it unless the selected source material is acceptable to send to the provider. Storage, graph tables, evidence links, and belief ranking remain local.
 
 ```bash
 export OPENROUTER_API_KEY="..."

@@ -67,6 +67,8 @@ Installing the server alone creates an archive. The provider/plugin integration 
 
 The graph is built from imported source entries; it is not seeded. Its pipeline has two required halves: **enqueue extraction jobs, then drain them with an extractor**. A queue that only grows is a stalled graph, not progress.
 
+**Privacy boundary:** graph storage and belief ranking stay local, but the default extractor sends the selected source-entry text to an external OpenRouter model to propose facts. Enable extraction only if you accept that provider receiving the selected content; use local/manual facts only if you do not.
+
 The belief layer ranks derived facts but does not replace raw records. On a new installation it has no history and should be empty. Its ranking needs real use over time; it is not yet a claim of proven “better memory.”
 
 - [Knowledge graph and extraction](docs/knowledge-graph.md)
