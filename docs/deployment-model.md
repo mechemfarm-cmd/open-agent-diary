@@ -28,8 +28,9 @@ status message.
 3. Create or update a clean source checkout separately from local data.
 4. Run the project test suite, compile check, and `agent-diary --json doctor`
    against a disposable data root.
-5. Point the service to the verified checkout while keeping its data path
-   outside the source tree.
+5. Set `AGENTDIARY_DATA` to the machine-local data directory and point the
+   service to the verified checkout. The default remains `<checkout>/data` for
+   simple single-machine installs.
 6. Restart only that machine's Diary service, then verify the process import
    path, HTTP health, search, and graph queue.
 7. Record the commit IDs, service path, data path, and rollback location in a

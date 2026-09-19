@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 
@@ -21,7 +22,8 @@ class Paths:
 
 def default_paths(root: Path | None = None) -> Paths:
     project_root = (root or Path.cwd()).resolve()
-    data_root = project_root / "data"
+    configured_data_root = os.environ.get("AGENTDIARY_DATA") if root is None else None
+    data_root = Path(configured_data_root).expanduser().resolve() if configured_data_root else project_root / "data"
     return Paths(
         root=project_root,
         data_root=data_root,
