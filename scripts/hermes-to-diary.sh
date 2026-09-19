@@ -102,5 +102,57 @@ python3 scripts/backfill-hermes-work-traces.py \
     --hermes-db "$HERMES_DB" \
     --data-dir data 2>&1 || echo "  ⚠ Work trace backfill had issues (non-fatal)"
 
+# ── Third pass: feed the optional knowledge graph ────────────────────
+# Importing entries alone does not update the graph. Enqueue recent source
+# entries and then drain a bounded number of extraction jobs. The queue/worker
+# separation is intentional: extraction can call a hosted model and may take a
+# long time for one transcript.
+DIARY_API="${AGENT_DIARY_BASE:-http://127.0.0.1:8041}"
+echo ""
+echo "--- Feeding the knowledge graph ---"
+
+if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -f "$HOME/.hermes/.env" ]; then
+    OPENROUTER_API_KEY="$(grep -m1 '^OPENROUTER_API_KEY=' "$HOME/.hermes/.env" | cut -d= -f2- | tr -d '"'"'"' ')"
+    export OPENROUTER_API_KEY
+fi
+
+# One long transcript can exceed the historical ten-minute job lease. Keep a
+# generous lease and claim one job at a time so work is never re-claimed while
+# still running. The bounded daily slice keeps a cron wrapper below its limit.
+export GRAPH_EXTRACTOR_LEASE_SECONDS="${GRAPH_EXTRACTOR_LEASE_SECONDS:-3600}"
+GRAPH_EXTRACTOR_DAILY_JOBS="${GRAPH_EXTRACTOR_DAILY_JOBS:-3}"
+queue_json="$DIARY_ROOT/data/staging/graph-queue.json"
+
+graph_pending() {
+    curl -s -X POST "$DIARY_API/graph/queue_status" \
+        -H 'Content-Type: application/json' -d '{}' -o "$queue_json" 2>/dev/null || true
+    python3 -c "import json,sys
+try:
+    print(json.load(open(sys.argv[1]))['result']['pending'])
+except Exception:
+    print('?')
+" "$queue_json" 2>/dev/null || echo "?"
+}
+
+# Idempotent: already-enqueued source entries are skipped.
+curl -s -X POST "$DIARY_API/graph/enqueue_recent" \
+    -H 'Content-Type: application/json' -d '{"limit": 200}' > /dev/null 2>&1 || true
+pending_before=$(graph_pending)
+
+if [ "$pending_before" = "?" ]; then
+    echo "  ⚠ diary server unreachable at $DIARY_API — graph not fed"
+elif [ -z "${OPENROUTER_API_KEY:-}" ]; then
+    echo "  ⚠ OPENROUTER_API_KEY not set — ${pending_before} job(s) pending"
+elif [ "$pending_before" = "0" ]; then
+    echo "  graph queue empty"
+else
+    jobs_done=0
+    while [ "$(graph_pending)" != "0" ] && [ "$jobs_done" -lt "$GRAPH_EXTRACTOR_DAILY_JOBS" ]; do
+        python3 scripts/hermes-graph-extractor.py --limit 1 2>&1 | grep -E '^Claimed' || true
+        jobs_done=$((jobs_done + 1))
+    done
+    echo "  graph: ${pending_before} → $(graph_pending) job(s) pending"
+fi
+
 echo ""
 echo "=== Hermes-to-diary import complete ==="
