@@ -21,6 +21,68 @@ class SemanticEvaluationCase:
     known_traps: list[str]
 
 
+@dataclass(frozen=True)
+class SemanticComparisonMetrics:
+    case_id: str
+    baseline_required_element_coverage: float
+    required_element_coverage: float
+    source_reference_coverage: float
+    stale_conflict_handled: bool
+    unsupported_claim_count: int
+    baseline_output_size: int
+    situation_output_size: int
+    baseline_failure_categories: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case_id": self.case_id,
+            "baseline_required_element_coverage": self.baseline_required_element_coverage,
+            "required_element_coverage": self.required_element_coverage,
+            "source_reference_coverage": self.source_reference_coverage,
+            "stale_conflict_handled": self.stale_conflict_handled,
+            "unsupported_claim_count": self.unsupported_claim_count,
+            "baseline_output_size": self.baseline_output_size,
+            "situation_output_size": self.situation_output_size,
+            "baseline_failure_categories": self.baseline_failure_categories,
+        }
+
+
+def compare_semantic_retrieval(
+    case: SemanticEvaluationCase,
+    *,
+    baseline_text: str,
+    situation_text: str,
+    situation_source_refs: list[str],
+    unsupported_claims: list[str] | None = None,
+) -> SemanticComparisonMetrics:
+    """Compare current retrieval text with a source-linked situation preview.
+
+    This helper is deterministic and read-only; it scores literal fixture labels
+    against supplied outputs so evaluation artifacts can be generated without
+    touching live recall state.
+    """
+    baseline_coverage = _coverage(case.expected_elements, baseline_text)
+    situation_coverage = _coverage(case.expected_elements, situation_text)
+    required_refs = [ref for ref in case.required_source_refs if ref.lower() != "none"]
+    ref_coverage = _coverage(required_refs, "\n".join([situation_text, *situation_source_refs])) if required_refs else 1.0
+    lower_situation = situation_text.lower()
+    stale_conflict_handled = not case.known_traps or any(
+        marker in lower_situation for marker in ("superseded", "historical", "conflict", "stale", "resolved", "planned", "inferred", "empty")
+    )
+    categories = _failure_categories(case, baseline_text=baseline_text, baseline_coverage=baseline_coverage)
+    return SemanticComparisonMetrics(
+        case_id=case.case_id,
+        baseline_required_element_coverage=baseline_coverage,
+        required_element_coverage=situation_coverage,
+        source_reference_coverage=ref_coverage,
+        stale_conflict_handled=stale_conflict_handled,
+        unsupported_claim_count=len(unsupported_claims or []),
+        baseline_output_size=len(baseline_text),
+        situation_output_size=len(situation_text),
+        baseline_failure_categories=categories,
+    )
+
+
 def load_semantic_evaluation_cases(path: Path | str) -> list[SemanticEvaluationCase]:
     fixture_path = Path(path)
     seen: set[str] = set()
@@ -201,12 +263,11 @@ def assemble_situation(
     for cand in budgeted:
         item = _item_from_candidate(cand, char_limit=per_item_chars)
         evidence.append(item)
-        predicate = (cand.predicate or "").upper()
-        text_lower = cand.text.lower()
-        if predicate in {"DECISION", "DECIDED", "RATIONALE"} or text_lower.startswith("decision:"):
+        roles = _candidate_role_tokens(cand)
+        if _is_decision_like(roles):
             decisions.append(item)
             continue
-        if predicate in {"OPEN_QUESTION", "NEXT_ACTION", "BLOCKED_BY"} or any(h in text_lower for h in ("open question", "todo", "next step", "blocker", "unresolved")):
+        if _is_open_loop_like(cand, roles):
             open_questions.append(item)
             continue
         if cand.status == "current" and not cand.superseded_by:
@@ -347,6 +408,76 @@ def _dedupe_refs(refs: Iterable[EvidenceRef]) -> list[EvidenceRef]:
         seen.add(key)
         out.append(ref)
     return out
+
+
+def _coverage(required: list[str], text: str) -> float:
+    if not required:
+        return 1.0
+    lowered = text.lower()
+    hits = sum(1 for item in required if _phrase_matches(item, lowered))
+    return hits / len(required)
+
+
+def _phrase_matches(phrase: str, lowered_text: str) -> bool:
+    terms = [term for term in str(phrase).lower().replace(":", " ").split() if len(term) > 2]
+    if not terms:
+        return False
+    return all(term in lowered_text for term in terms)
+
+
+def _failure_categories(case: SemanticEvaluationCase, *, baseline_text: str, baseline_coverage: float) -> list[str]:
+    categories: list[str] = []
+    traps = " ".join(case.known_traps).lower()
+    lower_baseline = baseline_text.lower()
+    if baseline_coverage < 1.0:
+        categories.append("retrieval failure")
+    if any(token in traps for token in ("stale", "superseded", "resolved", "planned")) and not any(token in lower_baseline for token in ("superseded", "historical", "stale", "resolved", "planned")):
+        categories.append("temporal/change failure")
+    if "conflict" in traps and "conflict" not in lower_baseline:
+        categories.append("missing relationship")
+    if case.purpose == "decision_rationale" and baseline_coverage < 1.0:
+        categories.append("missing decision rationale")
+    if case.purpose == "next_action" and baseline_coverage < 1.0:
+        categories.append("poor context composition")
+    if "inferred" in traps and "inferred" not in lower_baseline:
+        categories.append("missing episode structure")
+    return categories
+
+
+def _candidate_role_tokens(cand: SemanticCandidate) -> set[str]:
+    tokens: set[str] = set()
+    metadata = cand.metadata if isinstance(cand.metadata, dict) else {}
+    for key in ("semantic_role", "role", "kind", "category", "event_type"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            tokens.update(_split_role_tokens(value))
+    semantic_value = metadata.get("semantic")
+    semantic = semantic_value if isinstance(semantic_value, dict) else {}
+    for key in ("role", "kind", "category"):
+        value = semantic.get(key)
+        if isinstance(value, str):
+            tokens.update(_split_role_tokens(value))
+    for ref in cand.evidence_refs:
+        if ref.role:
+            tokens.update(_split_role_tokens(ref.role))
+    if cand.author_role:
+        tokens.update(_split_role_tokens(cand.author_role))
+    return tokens
+
+
+def _split_role_tokens(value: str) -> set[str]:
+    return {part for part in str(value).lower().replace("-", "_").replace("/", "_").split("_") if part}
+
+
+def _is_decision_like(tokens: set[str]) -> bool:
+    return bool(tokens & {"decision", "decides", "decided", "choice", "chosen", "selected", "selection", "rationale", "reason"})
+
+
+def _is_open_loop_like(cand: SemanticCandidate, tokens: set[str]) -> bool:
+    if tokens & {"question", "ask", "review", "todo", "task", "action", "followup", "blocker", "blocked", "unresolved", "open"}:
+        return True
+    text = cand.text.strip()
+    return text.endswith("?")
 
 
 def _format_refs(refs: list[EvidenceRef]) -> str:

@@ -78,4 +78,11 @@ Topic: `Service Cedar`; purpose: `decision_rationale`.
 
 ## Prototype boundaries
 
-The first version is deterministic and local-only. It does not call an LLM, use a vector store, mutate databases, update belief usage, change live recall, add service routes, or send data to any external service. Empty/new-user diaries produce an explicit empty situation rather than seeded facts.
+The first version is deterministic and local-only. It does not call an LLM, use a vector store, update belief usage, change live recall, or send data to any external service. Empty/new-user diaries produce an explicit empty situation rather than seeded facts.
+
+Classification is generic: source adapters prefer explicit metadata, author/evidence roles, event types, status/supersession fields, and source links. They do not require project-specific names or graph predicate names. Text-only fallback is conservative and may miss decisions or open loops when entries lack role/event metadata.
+
+## Read-only preview
+
+A bounded preview is available through the local CLI and `POST /semantic/preview` for inspection only. Required payload fields are `topic` and `purpose`; `limit` and `char_budget` are capped. The preview returns both rendered text and structured source-linked situation data, and it must not be called automatically from the Hermes recall path without a later review plan.
+

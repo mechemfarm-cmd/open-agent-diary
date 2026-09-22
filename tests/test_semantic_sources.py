@@ -4,12 +4,14 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+import json
 
 from agent_diary.config import Paths as PathsType
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.graph_repository import insert_entity, insert_evidence, insert_fact
 from agent_diary.index.repository import insert_work_trace_event
-from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence, WorkTraceEvent
+from agent_diary.index.repository import insert_entry
+from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence, RawEntry, WorkTraceEvent
 from agent_diary.analytics.semantic_sources import collect_semantic_candidates
 
 
@@ -134,6 +136,31 @@ class TestSemanticSources(unittest.TestCase):
         self.assertEqual(candidate.author_role, "agent")
         self.assertEqual(candidate.evidence_refs[0].source_kind, "work_trace")
         self.assertEqual(before, after)
+
+    def test_raw_entry_candidates_are_source_linked_and_do_not_require_graph_facts(self):
+        entry = RawEntry(
+            entry_id="entry_blue_finch_status",
+            entry_type="note",
+            source="synthetic",
+            author_role="human",
+            content="Blue Finch migration is in dry-run. Review checksum comparison before rollout.",
+            created_at="2026-09-22T08:00:00+00:00",
+            title="Blue Finch status",
+            metadata={"semantic": {"subject": "Blue Finch migration", "role": "state"}},
+        )
+        raw_path = self.paths.entries_dir / "entry_blue_finch_status.json"
+        raw_path.write_text(json.dumps(entry.to_dict()), encoding="utf-8")
+        insert_entry(self.paths.sqlite_path, entry, str(raw_path))
+
+        candidates = collect_semantic_candidates(self.paths, topic="Blue Finch", limit=10)
+
+        candidate = next(c for c in candidates if c.source_kind == "raw_entry")
+        self.assertEqual(candidate.source_id, "entry_blue_finch_status")
+        self.assertEqual(candidate.subject, "Blue Finch migration")
+        self.assertEqual(candidate.author_role, "human")
+        self.assertEqual(candidate.evidence_refs[0].source_kind, "raw_entry")
+        self.assertEqual(candidate.evidence_refs[0].source_id, "entry_blue_finch_status")
+        self.assertEqual(candidate.metadata["semantic_role"], "state")
 
     def _count_belief_usage_rows(self) -> int:
         with sqlite3.connect(self.paths.sqlite_path) as conn:

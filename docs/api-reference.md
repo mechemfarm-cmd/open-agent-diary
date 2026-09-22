@@ -17,6 +17,7 @@ Errors use `{"ok": false, "error": "..."}`. Keep the server on `127.0.0.1` unles
 | `POST /search_all` | read-only | combined search |
 | `POST /list_entries` | read-only | timeline/browse |
 | `POST /fetch_entry_detail` | read-only | raw entry plus attached layers |
+| `POST /semantic/preview` | read-only | bounded source-linked semantic situation preview |
 | `POST /list_imports` | read-only | import batches |
 
 Example:
@@ -26,6 +27,10 @@ curl -sS -X POST http://127.0.0.1:8041/search_memory \
   -H 'Content-Type: application/json' \
   -d '{"query":"release checklist","limit":5}'
 ```
+
+## Semantic preview
+
+`POST /semantic/preview` requires `topic` and `purpose` (`current_status`, `decision_rationale`, or `next_action`). Optional `limit` and `char_budget` are hard-capped by the handler. The response includes `read_only: true`, rendered `preview` text, and a structured `situation` with source references and inference notes. It does not record belief exposure and is not part of automatic recall.
 
 ## Local write/import routes
 

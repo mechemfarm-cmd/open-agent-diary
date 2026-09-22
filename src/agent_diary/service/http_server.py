@@ -43,6 +43,7 @@ class AgentDiaryHandler(BaseHTTPRequestHandler):
         "/list_work_trace": handlers.list_work_trace,
         "/list_entries": handlers.list_entries,
         "/fetch_entry_detail": handlers.fetch_entry_detail,
+        "/semantic/preview": handlers.semantic_preview,
         # ── Knowledge Graph routes ──
         "/graph/find_entity": handlers.graph_find_entity,
         "/graph/get_entity": handlers.graph_get_entity,

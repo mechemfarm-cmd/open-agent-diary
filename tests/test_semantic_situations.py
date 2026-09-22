@@ -18,6 +18,8 @@ def candidate(
     source_kind: str = "graph_fact",
     superseded_by: str | None = None,
     provisional: bool = False,
+    metadata: dict | None = None,
+    evidence_role: str = "establishes",
 ) -> SemanticCandidate:
     return SemanticCandidate(
         source_kind=source_kind,
@@ -30,7 +32,8 @@ def candidate(
         object_value=object_value or text,
         superseded_by=superseded_by,
         provisional=provisional,
-        evidence_refs=[EvidenceRef(source_kind="raw_entry", source_id=f"entry_{source_id}", timestamp=timestamp, role="establishes")],
+        metadata=metadata or {},
+        evidence_refs=[EvidenceRef(source_kind="raw_entry", source_id=f"entry_{source_id}", timestamp=timestamp, role=evidence_role)],
     )
 
 
@@ -41,7 +44,7 @@ class TestSemanticSituations(unittest.TestCase):
             purpose="current_status",
             candidates=[
                 candidate("gf_atlas_state", text="Project Atlas is a read-only semantic-memory prototype", timestamp="2026-09-21T10:00:00+00:00"),
-                candidate("gf_atlas_decision", text="Decision: keep Project Atlas data out of external services", timestamp="2026-09-21T11:00:00+00:00", predicate="DECISION"),
+                candidate("gf_atlas_decision", text="Keep Project Atlas data out of external services", timestamp="2026-09-21T11:00:00+00:00", metadata={"semantic_role": "decision"}),
             ],
         )
 
@@ -49,8 +52,29 @@ class TestSemanticSituations(unittest.TestCase):
         self.assertEqual(situation.purpose, "current_status")
         self.assertEqual(situation.episode["anchor"], "Project Atlas")
         self.assertEqual(situation.current_state[0].source_refs[0].source_id, "entry_gf_atlas_state")
-        self.assertEqual(situation.decisions[0].text, "Decision: keep Project Atlas data out of external services")
+        self.assertEqual(situation.decisions[0].text, "Keep Project Atlas data out of external services")
         self.assertEqual(situation.inference_notes[0].kind, "grouping")
+
+    def test_generic_metadata_and_evidence_roles_classify_without_predicate_vocabulary(self):
+        situation = assemble_situation(
+            topic="Blue Finch",
+            purpose="next_action",
+            candidates=[
+                candidate("choice", subject="Blue Finch", text="Use staged rollout because it is reversible", timestamp="2026-09-21T10:00:00+00:00", predicate="RELATES_TO", metadata={"semantic_role": "decision"}),
+                candidate("question", subject="Blue Finch", text="Can checksum comparison finish before review?", timestamp="2026-09-21T11:00:00+00:00", predicate="RELATES_TO", evidence_role="question"),
+            ],
+        )
+
+        self.assertEqual([item.source_id for item in situation.decisions], ["choice"])
+        self.assertEqual([item.source_id for item in situation.open_questions], ["question"])
+
+    def test_semantic_situation_code_does_not_name_deployment_specific_predicates(self):
+        from pathlib import Path
+
+        source = Path("src/agent_diary/analytics/semantic_situations.py").read_text(encoding="utf-8")
+
+        for token in ["DECISION", "OPEN_QUESTION", "NEXT_ACTION", "BLOCKED_BY"]:
+            self.assertNotIn(token, source)
 
     def test_changed_state_marks_historical_candidate_superseded_not_current(self):
         situation = assemble_situation(

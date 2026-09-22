@@ -71,6 +71,7 @@ def collect_semantic_candidates(paths: Paths, *, topic: str, limit: int = 20) ->
     candidates = [
         *_graph_fact_candidates(paths.sqlite_path, topic=topic, limit=bounded_limit),
         *_work_trace_candidates(paths.sqlite_path, topic=topic, limit=bounded_limit),
+        *_raw_entry_candidates(paths.sqlite_path, topic=topic, limit=bounded_limit),
     ]
     candidates.sort(key=lambda c: (c.timestamp, c.source_kind, c.source_id), reverse=True)
     return candidates[:bounded_limit]
@@ -143,6 +144,12 @@ def _graph_fact_candidates(db_path, *, topic: str, limit: int) -> list[SemanticC
             continue
         meta = _load_json_object(row["metadata"])
         belief = meta.get("belief") if isinstance(meta.get("belief"), dict) else {}
+        semantic_value = meta.get("semantic")
+        semantic_meta = semantic_value if isinstance(semantic_value, dict) else {}
+        semantic_role = semantic_meta.get("role") or meta.get("semantic_role") or meta.get("role")
+        candidate_meta: dict[str, Any] = {"belief": belief} if belief else {}
+        if semantic_role:
+            candidate_meta["semantic_role"] = str(semantic_role)
         out.append(
             SemanticCandidate(
                 source_kind="graph_fact",
@@ -157,7 +164,7 @@ def _graph_fact_candidates(db_path, *, topic: str, limit: int) -> list[SemanticC
                 superseded_by=str(row["superseded_by_fact_id"]) if row["superseded_by_fact_id"] else None,
                 predicate=str(row["predicate"] or ""),
                 object_value=obj,
-                metadata={"belief": belief} if belief else {},
+                metadata=candidate_meta,
             )
         )
         if len(out) >= limit:
@@ -202,8 +209,79 @@ def _work_trace_candidates(db_path, *, topic: str, limit: int) -> list[SemanticC
                 ],
                 author_role=str(row["actor"] or row["source_surface"] or "unknown"),
                 confidence="observed",
+                metadata={"event_type": str(row["event_type"] or ""), "source_surface": str(row["source_surface"] or "")},
             )
         )
         if len(out) >= limit:
             break
     return out
+
+
+def _raw_entry_candidates(db_path, *, topic: str, limit: int) -> list[SemanticCandidate]:
+    with closing(sqlite3.connect(db_path, timeout=5.0)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT entry_id, created_at, title, source, author_role, raw_file_path,
+                   entry_type, source_session_id, source_conversation_id, import_id, truthful_source
+            FROM entries
+            ORDER BY created_at DESC, entry_id DESC
+            LIMIT ?
+            """,
+            (max(limit * 4, limit),),
+        ).fetchall()
+    out: list[SemanticCandidate] = []
+    for row in rows:
+        body = _read_json_file(row["raw_file_path"])
+        metadata_value = body.get("metadata")
+        metadata = metadata_value if isinstance(metadata_value, dict) else {}
+        semantic_value = metadata.get("semantic")
+        semantic = semantic_value if isinstance(semantic_value, dict) else {}
+        title = str(body.get("title") or row["title"] or "").strip()
+        content = str(body.get("content") or "").strip()
+        subject = str(semantic.get("subject") or title or row["source_conversation_id"] or row["source_session_id"] or row["source"] or "raw entry")
+        if not _topic_match(topic, subject, title, content, row["source"], row["entry_type"], row["source_session_id"], row["source_conversation_id"]):
+            continue
+        semantic_role = semantic.get("role") or metadata.get("semantic_role") or metadata.get("role")
+        candidate_meta = {
+            "source": str(row["source"] or ""),
+            "entry_type": str(row["entry_type"] or ""),
+            "truthful_source": bool(row["truthful_source"]),
+        }
+        if semantic_role:
+            candidate_meta["semantic_role"] = str(semantic_role)
+        out.append(
+            SemanticCandidate(
+                source_kind="raw_entry",
+                source_id=str(row["entry_id"]),
+                subject=subject,
+                text=content or title or str(row["entry_id"]),
+                timestamp=str(row["created_at"]),
+                status="current",
+                evidence_refs=[
+                    EvidenceRef(
+                        source_kind="raw_entry",
+                        source_id=str(row["entry_id"]),
+                        timestamp=str(row["created_at"]),
+                        role=str(semantic_role or row["author_role"] or "source"),
+                    )
+                ],
+                author_role=str(row["author_role"] or "unknown"),
+                confidence="source-linked" if row["truthful_source"] else None,
+                metadata=candidate_meta,
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _read_json_file(path_value: Any) -> dict[str, Any]:
+    if not path_value:
+        return {}
+    try:
+        with open(str(path_value), "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}

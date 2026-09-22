@@ -15,6 +15,7 @@ from agent_diary.analytics.conversation_briefs import build_conversation_brief_t
 from agent_diary.analytics.compressed_memory import build_compressed_memory_text
 from agent_diary.analytics.open_loops import build_open_loops_payload
 from agent_diary.analytics.ranking import rank as rank_beliefs, render_selection
+from agent_diary.analytics.semantic_situations import ALLOWED_PURPOSES, compile_situation, render_situation_view
 from agent_diary.index.belief_repository import load_candidates
 from agent_diary.index.belief_usage import credit_from_new_evidence, record_acted_on, record_surface
 from agent_diary.config import Paths
@@ -401,6 +402,33 @@ def append_overlay(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def semantic_preview(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    topic = str(payload.get("topic", "")).strip()
+    if not topic:
+        raise ValueError("topic is required")
+    purpose = str(payload.get("purpose", "")).strip()
+    if purpose not in ALLOWED_PURPOSES:
+        raise ValueError(f"purpose must be one of: {', '.join(sorted(ALLOWED_PURPOSES))}")
+    limit = int(payload.get("limit", 20))
+    char_budget = int(payload.get("char_budget", 4000))
+    if limit < 1 or limit > 50:
+        raise ValueError("limit must be between 1 and 50")
+    if char_budget < 200 or char_budget > 12000:
+        raise ValueError("char_budget must be between 200 and 12000")
+    situation = compile_situation(paths, topic=topic, purpose=purpose, limit=limit, char_budget=char_budget)
+    preview = render_situation_view(situation, purpose=purpose, char_budget=char_budget)
+    return {
+        "read_only": True,
+        "topic": topic,
+        "purpose": purpose,
+        "limit": limit,
+        "char_budget": char_budget,
+        "preview": preview,
+        "situation": situation.to_dict(),
+        "note": "Read-only derived preview; raw entries remain authoritative and recall/belief usage is not updated.",
+    }
 
 
 def _make_import_id() -> str:

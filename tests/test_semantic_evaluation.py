@@ -4,7 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
-from agent_diary.analytics.semantic_situations import load_semantic_evaluation_cases
+from agent_diary.analytics.semantic_situations import compare_semantic_retrieval, load_semantic_evaluation_cases
 
 FIXTURE = Path(__file__).parent / "fixtures" / "semantic-situations.jsonl"
 
@@ -38,6 +38,24 @@ class TestSemanticEvaluationFixture(unittest.TestCase):
                 load_semantic_evaluation_cases(duplicate_path)
         finally:
             duplicate_path.unlink(missing_ok=True)
+
+    def test_comparison_metrics_measure_baseline_and_situation_outputs(self):
+        case = load_semantic_evaluation_cases(FIXTURE)[0]
+
+        metrics = compare_semantic_retrieval(
+            case,
+            baseline_text="Project Atlas once ran on Server Alpha.",
+            situation_text="Current host is Server Beta. Older Server Alpha host is superseded. [raw_entry:atlas-current] [raw_entry:atlas-old]",
+            situation_source_refs=["raw_entry:atlas-current", "raw_entry:atlas-old"],
+            unsupported_claims=["unlinked claim"],
+        )
+
+        self.assertEqual(metrics.case_id, case.case_id)
+        self.assertEqual(metrics.required_element_coverage, 1.0)
+        self.assertEqual(metrics.source_reference_coverage, 1.0)
+        self.assertEqual(metrics.unsupported_claim_count, 1)
+        self.assertIn("temporal/change failure", metrics.baseline_failure_categories)
+        self.assertGreater(metrics.baseline_output_size, 0)
 
 
 if __name__ == "__main__":
