@@ -313,6 +313,10 @@ def backfill_hermes_work_traces(
     from agent_diary.service.handlers import append_work_trace_event
 
     paths = default_paths(Path(data_dir).parent)
+    if os.environ.get("AGENTDIARY_DATA"):
+        # Honor the env var like the CLI/server do, so backfill writes land in
+        # the same data root as session imports (avoids split-brain).
+        paths = default_paths()
     results: list[dict] = []
     total_events = 0
     total_imported = 0
