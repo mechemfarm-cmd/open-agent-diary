@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,26 @@ from urllib import request as urlrequest
 from agent.memory_provider import MemoryProvider, is_trivial_prompt, spawn_context_thread
 
 logger = logging.getLogger(__name__)
+
+# The autonomy layer is an optional add-on: when it is not importable this provider must behave
+# exactly like a plain Diary provider, so every import of it is guarded. Hermes runs user plugins
+# in an isolated host process whose sys.path we do not control, and its own dependencies resolve
+# from a uv cache rather than the interpreter's site-packages — an installed `hermes_autonomy`
+# can therefore be invisible to the host while being perfectly importable from a shell. So the
+# package may be vendored next to this file in `vendor/`, which is added here.
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+
+
+def _autonomy_module(name: str):
+    """Import a hermes_autonomy submodule, falling back to the vendored copy beside this file."""
+    import importlib
+
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError:
+        if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
+            sys.path.append(_VENDOR_DIR)
+        return importlib.import_module(name)
 
 _DIARY_BASE = os.environ.get("AGENTDIARY_URL", "http://127.0.0.1:8041")
 # Diary data root differs per host (Emily: ~/development/agent-diary/data,
@@ -133,7 +154,7 @@ class AgentDiaryProvider(MemoryProvider):
 
         # Phase 3 (read-only): prepend the autonomy working-state block when enabled.
         try:
-            from hermes_autonomy.integration import run_injection
+            run_injection = _autonomy_module("hermes_autonomy.integration").run_injection
 
             inj = run_injection()
         except Exception:
@@ -146,7 +167,9 @@ class AgentDiaryProvider(MemoryProvider):
             # raising, rendered as DATA. Skipped for trivial prompts — raising something
             # unprompted in response to "ok" would just be noise.
             try:
-                from hermes_autonomy.integration import run_surfacing_from_hermes
+                run_surfacing_from_hermes = _autonomy_module(
+                    "hermes_autonomy.integration"
+                ).run_surfacing_from_hermes
 
                 surf = run_surfacing_from_hermes(query=query, session_id=session_id)
             except Exception:
@@ -296,7 +319,9 @@ class AgentDiaryProvider(MemoryProvider):
 def _capture_worker(session_id, user_content, assistant_content):
     """Run continuity capture off the turn path; never break a turn, but never fail silently."""
     try:
-        from hermes_autonomy.integration import run_capture_from_hermes
+        run_capture_from_hermes = _autonomy_module(
+            "hermes_autonomy.integration"
+        ).run_capture_from_hermes
 
         run_capture_from_hermes(
             session_id=session_id or "",
