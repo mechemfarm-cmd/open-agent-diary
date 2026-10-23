@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib import request as urlrequest
 
-from agent.memory_provider import MemoryProvider, is_trivial_prompt
+from agent.memory_provider import MemoryProvider, is_trivial_prompt, spawn_context_thread
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,21 @@ class AgentDiaryProvider(MemoryProvider):
         self._agent_context = kwargs.get("agent_context", "primary") or "primary"
         self._platform = kwargs.get("platform", "") or ""
 
+    def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None, turn_author=None):
+        # Passive continuity capture (Phase 2). Guarded, asynchronous, never
+        # breaks a turn. Only primary sessions capture; cron/subagents skip.
+        if getattr(self, "_agent_context", "primary") != "primary":
+            return
+        try:
+            spawn_context_thread(
+                _capture_worker,
+                name="autonomy-capture",
+                daemon=True,
+                args=(session_id or self._session_id, user_content, assistant_content),
+            ).start()
+        except Exception:
+            pass
+
     def system_prompt_block(self) -> str:
         return (
             "Agent Diary (agentdiary) is your primary durable memory. Facts you "
@@ -111,8 +126,38 @@ class AgentDiaryProvider(MemoryProvider):
     # -- recall ----------------------------------------------------------
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if is_trivial_prompt(query):
-            return ""
+        blocks: List[str] = []
+
+        # Phase 3 (read-only): prepend the autonomy working-state block when enabled.
+        try:
+            from hermes_autonomy.integration import run_injection
+
+            inj = run_injection()
+        except Exception:
+            inj = ""
+        if inj:
+            blocks.append(inj)
+
+        if not is_trivial_prompt(query):
+            # Phase 7 (separately permissioned, OFF by default): a queued observation worth
+            # raising, rendered as DATA. Skipped for trivial prompts — raising something
+            # unprompted in response to "ok" would just be noise.
+            try:
+                from hermes_autonomy.integration import run_surfacing_from_hermes
+
+                surf = run_surfacing_from_hermes(query=query, session_id=session_id)
+            except Exception:
+                surf = ""
+            if surf:
+                blocks.append(surf)
+
+            recall = self._recall(query)
+            if recall:
+                blocks.append(recall)
+
+        return "\n\n".join(blocks) if blocks else ""
+
+    def _recall(self, query: str) -> str:
         result = _post("/search_memory", {"query": query, "limit": 8})
         if not result or not result.get("ok"):
             return ""
@@ -243,6 +288,20 @@ class AgentDiaryProvider(MemoryProvider):
 
     def backup_paths(self) -> List[str]:
         return [os.path.expanduser(_DIARY_DATA)]
+
+
+def _capture_worker(session_id, user_content, assistant_content):
+    """Run continuity capture off the turn path; swallow all errors."""
+    try:
+        from hermes_autonomy.integration import run_capture_from_hermes
+
+        run_capture_from_hermes(
+            session_id=session_id or "",
+            user_message=user_content or "",
+            assistant_response=assistant_content or "",
+        )
+    except Exception:
+        pass
 
 
 def register(ctx) -> None:
