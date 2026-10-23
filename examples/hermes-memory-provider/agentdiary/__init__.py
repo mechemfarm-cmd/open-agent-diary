@@ -102,6 +102,9 @@ class AgentDiaryProvider(MemoryProvider):
     def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None, turn_author=None):
         # Passive continuity capture (Phase 2). Guarded, asynchronous, never
         # breaks a turn. Only primary sessions capture; cron/subagents skip.
+        if os.environ.get("AUTONOMY_TRACE"):
+            logger.info("autonomy: sync_turn reached (ctx=%r session=%r)",
+                        getattr(self, "_agent_context", None), session_id)
         if getattr(self, "_agent_context", "primary") != "primary":
             return
         try:
@@ -112,7 +115,7 @@ class AgentDiaryProvider(MemoryProvider):
                 args=(session_id or self._session_id, user_content, assistant_content),
             ).start()
         except Exception:
-            pass
+            logger.warning("autonomy: could not start the capture thread", exc_info=True)
 
     def system_prompt_block(self) -> str:
         return (
@@ -291,7 +294,7 @@ class AgentDiaryProvider(MemoryProvider):
 
 
 def _capture_worker(session_id, user_content, assistant_content):
-    """Run continuity capture off the turn path; swallow all errors."""
+    """Run continuity capture off the turn path; never break a turn, but never fail silently."""
     try:
         from hermes_autonomy.integration import run_capture_from_hermes
 
@@ -301,7 +304,9 @@ def _capture_worker(session_id, user_content, assistant_content):
             assistant_response=assistant_content or "",
         )
     except Exception:
-        pass
+        # Swallowing this made a broken install indistinguishable from a quiet one: the
+        # store stayed empty with no trace anywhere an operator looks. Log it and move on.
+        logger.warning("autonomy: capture worker failed", exc_info=True)
 
 
 def register(ctx) -> None:
