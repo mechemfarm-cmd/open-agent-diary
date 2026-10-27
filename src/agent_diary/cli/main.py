@@ -19,6 +19,7 @@ from agent_diary.cli.openclaw_work_trace_import import (
 from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_session_export, build_openclaw_telegram_direct_transcript
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
+from agent_diary.index.retrieval_metrics import summarize_events
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -178,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--source-session-id", help="optional provenance filter")
     p_search.add_argument("--import-id", help="optional provenance filter")
     p_search.add_argument("--truthful-only", action="store_true", help="include only truthful imported entries")
+
+    p_retrieval_report = sub.add_parser(
+        "retrieval-report",
+        help="show read-only retrieval size, latency, and cost measurements",
+    )
+    p_retrieval_report.add_argument("--since", help="optional ISO-8601 lower bound for event time")
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -709,6 +716,11 @@ def main() -> None:
             "filters": _merge_scope_filters(args.filters, args),
         }
         out = search_memory(paths, payload)
+        _print(out, args.json)
+        return
+
+    if args.command == "retrieval-report":
+        out = summarize_events(paths.sqlite_path, since=args.since)
         _print(out, args.json)
         return
 

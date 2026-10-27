@@ -137,6 +137,70 @@ def list_events(db_path: Path, *, limit: int = 100) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def summarize_events(db_path: Path, *, since: str | None = None) -> dict[str, Any]:
+    """Aggregate retrieval measurements without exposing raw queries."""
+    normalized_since: str | None = None
+    if since is not None:
+        try:
+            parsed = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("since must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        normalized_since = parsed.astimezone(timezone.utc).isoformat()
+
+    ensure_schema(db_path)
+    where = "WHERE created_at >= ?" if normalized_since else ""
+    params = (normalized_since,) if normalized_since else ()
+    with closing(sqlite3.connect(db_path, timeout=5.0)) as conn:
+        conn.row_factory = sqlite3.Row
+        total = conn.execute(
+            f"""SELECT COUNT(*) AS event_count,
+                       COALESCE(SUM(candidate_count), 0) AS candidate_count,
+                       COALESCE(SUM(result_count), 0) AS result_count,
+                       COALESCE(SUM(returned_chars), 0) AS returned_chars,
+                       COALESCE(SUM(estimated_input_tokens), 0) AS estimated_input_tokens,
+                       SUM(provider_input_tokens) AS provider_input_tokens,
+                       SUM(provider_cost) AS provider_cost,
+                       COUNT(provider_input_tokens) AS provider_input_measurement_count,
+                       COUNT(provider_cost) AS provider_cost_measurement_count,
+                       COALESCE(AVG(latency_ms), 0.0) AS latency_ms_avg
+                FROM retrieval_events {where}""",
+            params,
+        ).fetchone()
+        routes = conn.execute(
+            f"""SELECT route,
+                       COUNT(*) AS event_count,
+                       COALESCE(SUM(candidate_count), 0) AS candidate_count,
+                       COALESCE(SUM(result_count), 0) AS result_count,
+                       COALESCE(SUM(returned_chars), 0) AS returned_chars,
+                       COALESCE(SUM(estimated_input_tokens), 0) AS estimated_input_tokens,
+                       SUM(provider_input_tokens) AS provider_input_tokens,
+                       SUM(provider_cost) AS provider_cost,
+                       COUNT(provider_input_tokens) AS provider_input_measurement_count,
+                       COUNT(provider_cost) AS provider_cost_measurement_count,
+                       COALESCE(AVG(latency_ms), 0.0) AS latency_ms_avg
+                FROM retrieval_events {where}
+                GROUP BY route
+                ORDER BY event_count DESC, route ASC""",
+            params,
+        ).fetchall()
+
+    def clean(row: sqlite3.Row) -> dict[str, Any]:
+        out = dict(row)
+        out["latency_ms_avg"] = round(float(out["latency_ms_avg"]), 3)
+        if out["provider_cost"] is not None:
+            out["provider_cost"] = float(out["provider_cost"])
+        return out
+
+    return {
+        "window_since": normalized_since,
+        "event_count": int(total["event_count"]),
+        "totals": clean(total),
+        "by_route": [clean(row) for row in routes],
+    }
+
+
 def elapsed_ms(started: float) -> float:
     """Return monotonic elapsed milliseconds, rounded for stable telemetry."""
     return round(max(0.0, time.monotonic() - started) * 1000.0, 3)
