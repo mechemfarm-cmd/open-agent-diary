@@ -23,6 +23,7 @@ from agent_diary.index.retrieval_metrics import summarize_events
 from agent_diary.orientation import create_run, list_runs, load_run, set_consent
 from agent_diary.orientation_inventory import inventory_metadata, inventory_source
 from agent_diary.orientation_preview import preview_approved_source
+from agent_diary.orientation_import import import_approved_history
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -226,6 +227,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_orientation_preview.add_argument("--format", dest="format_name", default="generic-message-jsonl")
     p_orientation_preview.add_argument("--max-messages", type=int, default=20)
     p_orientation_preview.add_argument("--sample-chars", type=int, default=240)
+
+    p_orientation_import = sub.add_parser(
+        "orientation-import",
+        help="import an approved Hermes-history source into raw Diary entries",
+    )
+    p_orientation_import.add_argument("--run-id", required=True)
+    p_orientation_import.add_argument("--source-id", required=True)
+    p_orientation_import.add_argument("--format", dest="format_name", default="generic-message-jsonl")
+    p_orientation_import.add_argument("--import-id")
+    p_orientation_import.add_argument("--dry-run", action="store_true")
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -807,6 +818,18 @@ def main() -> None:
             format_name=args.format_name,
             max_messages=args.max_messages,
             sample_chars=args.sample_chars,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-import":
+        out = import_approved_history(
+            paths,
+            run_id=args.run_id,
+            source_id=args.source_id,
+            format_name=args.format_name,
+            import_id=args.import_id,
+            dry_run=args.dry_run,
         )
         _print(out, args.json)
         return
