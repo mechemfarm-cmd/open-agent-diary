@@ -160,6 +160,27 @@ def list_runs(paths: Paths, *, limit: int = 20) -> list[dict[str, Any]]:
     return runs
 
 
+def update_source_metadata(
+    paths: Paths,
+    run_id: str,
+    source_id: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach non-content metadata to a source without changing consent."""
+    run = load_run(paths, run_id)
+    source = next((item for item in run["sources"] if item.get("source_id") == source_id), None)
+    if source is None:
+        raise KeyError(f"orientation source not found: {source_id}")
+    current = source.get("metadata", {})
+    if not isinstance(current, dict):
+        current = {}
+    current.update(metadata)
+    source["metadata"] = current
+    run["updated_at"] = _now()
+    _write_run(paths, run)
+    return run
+
+
 def set_consent(
     paths: Paths,
     run_id: str,

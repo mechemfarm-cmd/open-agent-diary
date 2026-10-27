@@ -7,9 +7,14 @@ symlinked directories, and excludes common credential/private paths by default.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
+
+from agent_diary.config import Paths
+from agent_diary.orientation import load_run, update_source_metadata
 
 EXCLUDED_DIRECTORY_NAMES = {
     ".aws",
@@ -137,3 +142,60 @@ def inventory_metadata(root: Path, *, max_entries: int = 10_000) -> dict[str, An
         "counts": counts,
         "items": items,
     }
+
+
+def inventory_source(
+    paths: Paths,
+    run_id: str,
+    source_id: str,
+    *,
+    max_entries: int = 10_000,
+) -> dict[str, Any]:
+    """Inventory the approved run source's locator and link the result to its manifest."""
+    run = load_run(paths, run_id)
+    source = next((item for item in run["sources"] if item.get("source_id") == source_id), None)
+    if source is None:
+        raise KeyError(f"orientation source not found: {source_id}")
+    if source.get("kind") not in {"filesystem_root", "project"}:
+        raise ValueError("metadata inventory requires a filesystem_root or project source")
+    locator = Path(str(source.get("locator", "")).strip()).expanduser()
+    result = inventory_metadata(locator, max_entries=max_entries)
+    created_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "orientation_version": 1,
+        "run_id": run_id,
+        "source_id": source_id,
+        "created_at": created_at,
+        "metadata_only": True,
+        "inventory": result,
+    }
+    directory = paths.data_root / "orientation" / "inventories"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{run_id}__{source_id}.json"
+    fd, temporary = tempfile.mkstemp(prefix=f".{run_id}__{source_id}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    update_source_metadata(
+        paths,
+        run_id,
+        source_id,
+        {
+            "inventory": {
+                "path": str(target.relative_to(paths.data_root)),
+                "created_at": created_at,
+                "metadata_only": True,
+                "counts": result["counts"],
+                "truncated": result["truncated"],
+            }
+        },
+    )
+    payload["inventory_path"] = str(target)
+    return payload

@@ -5,7 +5,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_diary.orientation_inventory import inventory_metadata
+from agent_diary.config import Paths
+from agent_diary.orientation import create_run, load_run
+from agent_diary.orientation_inventory import inventory_metadata, inventory_source
+
+
+def make_paths(root: Path) -> Paths:
+    data = root / "data"
+    return Paths(
+        root=root,
+        data_root=data,
+        entries_dir=data / "entries",
+        work_trace_dir=data / "work_trace",
+        overlays_dir=data / "overlays",
+        artifacts_dir=data / "artifacts",
+        imports_dir=data / "imports",
+        index_dir=data / "index",
+        config_dir=data / "config",
+        archive_dir=data / "archives",
+        sqlite_path=data / "index" / "memory.db",
+    )
 
 
 class TestOrientationInventory(unittest.TestCase):
@@ -55,6 +74,21 @@ class TestOrientationInventory(unittest.TestCase):
         file_path.write_text("x", encoding="utf-8")
         with self.assertRaises(ValueError):
             inventory_metadata(file_path)
+
+    def test_inventory_source_links_metadata_to_manifest_without_granting_content(self):
+        paths = make_paths(self.root)
+        run = create_run(
+            paths,
+            [{"source_id": "project", "kind": "project", "locator": str(self.root)}],
+            run_id="run_project",
+        )
+        result = inventory_source(paths, run["run_id"], "project", max_entries=20)
+        self.assertTrue(Path(result["inventory_path"]).exists())
+        manifest = load_run(paths, run["run_id"])
+        source = manifest["sources"][0]
+        self.assertTrue(source["metadata"]["inventory"]["metadata_only"])
+        self.assertFalse(source["content_access_granted"])
+        self.assertEqual(source["consent"], "pending")
 
 
 if __name__ == "__main__":
