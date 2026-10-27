@@ -20,6 +20,7 @@ from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.retrieval_metrics import summarize_events
+from agent_diary.orientation import create_run, list_runs, load_run, set_consent
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -185,6 +186,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="show read-only retrieval size, latency, and cost measurements",
     )
     p_retrieval_report.add_argument("--since", help="optional ISO-8601 lower bound for event time")
+
+    p_orientation_create = sub.add_parser(
+        "orientation-create",
+        help="create a consent-pending orientation run from a JSON source list",
+    )
+    p_orientation_create.add_argument("--sources", required=True, help="JSON array of source descriptors")
+    p_orientation_create.add_argument("--run-id")
+
+    p_orientation_list = sub.add_parser("orientation-list", help="list orientation runs")
+    p_orientation_list.add_argument("--limit", type=int, default=20)
+
+    p_orientation_show = sub.add_parser("orientation-show", help="show one orientation run")
+    p_orientation_show.add_argument("--run-id", required=True)
+
+    p_orientation_consent = sub.add_parser("orientation-consent", help="approve, reject, or revoke one source")
+    p_orientation_consent.add_argument("--run-id", required=True)
+    p_orientation_consent.add_argument("--source-id", required=True)
+    p_orientation_consent.add_argument("--decision", choices=["approved", "rejected", "revoked"], required=True)
+    p_orientation_consent.add_argument("--reason")
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -721,6 +741,30 @@ def main() -> None:
 
     if args.command == "retrieval-report":
         out = summarize_events(paths.sqlite_path, since=args.since)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-create":
+        out = create_run(paths, json.loads(args.sources), run_id=args.run_id)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-list":
+        _print({"runs": list_runs(paths, limit=args.limit)}, args.json)
+        return
+
+    if args.command == "orientation-show":
+        _print(load_run(paths, args.run_id), args.json)
+        return
+
+    if args.command == "orientation-consent":
+        out = set_consent(
+            paths,
+            args.run_id,
+            args.source_id,
+            args.decision,
+            reason=args.reason,
+        )
         _print(out, args.json)
         return
 
