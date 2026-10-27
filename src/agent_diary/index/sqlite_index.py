@@ -4,6 +4,8 @@ from contextlib import closing
 import sqlite3
 from pathlib import Path
 
+from agent_diary.index.retrieval_metrics import SCHEMA as RETRIEVAL_SCHEMA
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
   entry_id TEXT PRIMARY KEY,
@@ -196,6 +198,7 @@ def bootstrap_sqlite(db_path: Path) -> None:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
         conn.executescript(GRAPH_SCHEMA)
+        conn.executescript(RETRIEVAL_SCHEMA)
 
         entry_cols = {row[1] for row in conn.execute("PRAGMA table_info(entries)").fetchall()}
         entry_migrations = {
