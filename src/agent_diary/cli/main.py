@@ -22,6 +22,7 @@ from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.retrieval_metrics import summarize_events
 from agent_diary.orientation import create_run, list_runs, load_run, set_consent
 from agent_diary.orientation_inventory import inventory_metadata, inventory_source
+from agent_diary.orientation_preview import preview_approved_source
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -215,6 +216,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_orientation_inventory.add_argument("--max-entries", type=int, default=10000)
     p_orientation_inventory.add_argument("--run-id", help="persist inventory into an orientation run")
     p_orientation_inventory.add_argument("--source-id", help="source id within --run-id")
+
+    p_orientation_preview = sub.add_parser(
+        "orientation-preview",
+        help="preview an approved Hermes-history source without importing it",
+    )
+    p_orientation_preview.add_argument("--run-id", required=True)
+    p_orientation_preview.add_argument("--source-id", required=True)
+    p_orientation_preview.add_argument("--format", dest="format_name", default="generic-message-jsonl")
+    p_orientation_preview.add_argument("--max-messages", type=int, default=20)
+    p_orientation_preview.add_argument("--sample-chars", type=int, default=240)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -785,6 +796,18 @@ def main() -> None:
             out = inventory_source(paths, args.run_id, args.source_id, max_entries=args.max_entries)
         else:
             out = inventory_metadata(Path(args.root), max_entries=args.max_entries)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-preview":
+        out = preview_approved_source(
+            paths,
+            args.run_id,
+            args.source_id,
+            format_name=args.format_name,
+            max_messages=args.max_messages,
+            sample_chars=args.sample_chars,
+        )
         _print(out, args.json)
         return
 
