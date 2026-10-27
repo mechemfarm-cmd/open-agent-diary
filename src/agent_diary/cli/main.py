@@ -21,6 +21,7 @@ from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.retrieval_metrics import summarize_events
 from agent_diary.orientation import create_run, list_runs, load_run, set_consent
+from agent_diary.orientation_inventory import inventory_metadata
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -205,6 +206,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_orientation_consent.add_argument("--source-id", required=True)
     p_orientation_consent.add_argument("--decision", choices=["approved", "rejected", "revoked"], required=True)
     p_orientation_consent.add_argument("--reason")
+
+    p_orientation_inventory = sub.add_parser(
+        "orientation-inventory",
+        help="preview directory metadata without reading file contents",
+    )
+    p_orientation_inventory.add_argument("--root", required=True)
+    p_orientation_inventory.add_argument("--max-entries", type=int, default=10000)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -765,6 +773,11 @@ def main() -> None:
             args.decision,
             reason=args.reason,
         )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-inventory":
+        out = inventory_metadata(Path(args.root), max_entries=args.max_entries)
         _print(out, args.json)
         return
 
