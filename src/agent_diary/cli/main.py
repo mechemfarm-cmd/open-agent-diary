@@ -24,6 +24,7 @@ from agent_diary.orientation import create_run, list_runs, load_run, set_consent
 from agent_diary.orientation_inventory import inventory_metadata, inventory_source
 from agent_diary.orientation_preview import preview_approved_source
 from agent_diary.orientation_import import import_approved_history
+from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -237,6 +238,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_orientation_import.add_argument("--format", dest="format_name", default="generic-message-jsonl")
     p_orientation_import.add_argument("--import-id")
     p_orientation_import.add_argument("--dry-run", action="store_true")
+
+    p_candidates_generate = sub.add_parser("orientation-candidates-generate", help="generate pending orientation candidates")
+    p_candidates_generate.add_argument("--run-id", required=True)
+    p_candidates_generate.add_argument("--source-id", required=True)
+    p_candidates_generate.add_argument("--limit", type=int, default=10000)
+
+    p_candidates_list = sub.add_parser("orientation-candidates-list", help="list orientation candidates")
+    p_candidates_list.add_argument("--run-id", required=True)
+    p_candidates_list.add_argument("--status", choices=["pending", "approved", "rejected", "stale"])
+
+    p_candidate_review = sub.add_parser("orientation-candidate-review", help="approve, reject, or stale one candidate")
+    p_candidate_review.add_argument("--run-id", required=True)
+    p_candidate_review.add_argument("--candidate-id", required=True)
+    p_candidate_review.add_argument("--status", choices=["approved", "rejected", "stale"], required=True)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -831,6 +846,25 @@ def main() -> None:
             import_id=args.import_id,
             dry_run=args.dry_run,
         )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidates-generate":
+        out = generate_candidates(
+            paths,
+            run_id=args.run_id,
+            source_id=args.source_id,
+            limit=args.limit,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidates-list":
+        _print({"candidates": list_candidates(paths, args.run_id, status=args.status)}, args.json)
+        return
+
+    if args.command == "orientation-candidate-review":
+        out = set_candidate_status(paths, args.run_id, args.candidate_id, args.status)
         _print(out, args.json)
         return
 
