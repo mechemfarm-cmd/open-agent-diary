@@ -11,6 +11,7 @@ from agent_diary.orientation_candidates import generate_candidates, list_candida
 from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
 from agent_diary.orientation_review import show_candidate
 from agent_diary.orientation_context import build_context_pack
+from agent_diary.orientation_evaluation import evaluate_context_pack
 from agent_diary.orientation_import import import_approved_history
 
 
@@ -86,6 +87,22 @@ class TestOrientationCandidates(unittest.TestCase):
         self.assertEqual(pack["items"][0]["source"]["source_entry_ids"], candidate["source_entry_ids"])
         with self.assertRaises(ValueError):
             build_context_pack(self.paths, max_items=0)
+
+    def test_context_evaluation_reports_coverage_and_budget(self):
+        result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
+        candidate = next(item for item in result["candidates"] if item["kind"] == "user_statement")
+        set_candidate_status(self.paths, "candidate-run", candidate["candidate_id"], "approved")
+        knowledge = list_knowledge(self.paths)[0]
+        evaluation = evaluate_context_pack(
+            self.paths,
+            [{"case_id": "preference", "expected_knowledge_id": knowledge["knowledge_id"], "expected_terms": ["plain", "text"]}],
+            max_chars=10_000,
+        )
+        self.assertEqual(evaluation["case_count"], 1)
+        self.assertEqual(evaluation["baseline_hits"], 0)
+        self.assertEqual(evaluation["pack_hits"], 1)
+        self.assertEqual(evaluation["delta"], 1.0)
+        self.assertTrue(evaluation["budget_pass"])
 
     def test_approval_and_rejection_are_explicit(self):
         result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
