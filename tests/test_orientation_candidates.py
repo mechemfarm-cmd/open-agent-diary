@@ -12,6 +12,7 @@ from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, 
 from agent_diary.orientation_review import show_candidate
 from agent_diary.orientation_context import build_context_pack
 from agent_diary.orientation_evaluation import evaluate_context_pack
+from agent_diary.orientation_answer_evaluation import build_answer_eval_prompts
 from agent_diary.orientation_import import import_approved_history
 
 
@@ -103,6 +104,19 @@ class TestOrientationCandidates(unittest.TestCase):
         self.assertEqual(evaluation["pack_hits"], 1)
         self.assertEqual(evaluation["delta"], 1.0)
         self.assertTrue(evaluation["budget_pass"])
+
+    def test_answer_eval_prompts_are_paired_and_scored_by_rubric(self):
+        result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
+        candidate = next(item for item in result["candidates"] if item["kind"] == "user_statement")
+        set_candidate_status(self.paths, "candidate-run", candidate["candidate_id"], "approved")
+        prompts = build_answer_eval_prompts(
+            self.paths,
+            [{"case_id": "preference", "question": "What reporting style should I use?", "expected_facts": ["plain text"], "forbidden_facts": ["PDF"]}],
+        )
+        prompt = prompts["prompts"][0]
+        self.assertNotIn("Approved orientation context", prompt["without_context"])
+        self.assertIn("Approved orientation context", prompt["with_context"])
+        self.assertEqual(prompt["rubric"]["must_acknowledge_unknowns"], True)
 
     def test_approval_and_rejection_are_explicit(self):
         result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")

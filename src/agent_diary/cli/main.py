@@ -29,6 +29,7 @@ from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, 
 from agent_diary.orientation_review import show_candidate
 from agent_diary.orientation_context import build_context_pack
 from agent_diary.orientation_evaluation import evaluate_context_pack
+from agent_diary.orientation_answer_evaluation import build_answer_eval_prompts
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -279,6 +280,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_context_eval.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
     p_context_eval.add_argument("--max-items", type=int, default=20)
     p_context_eval.add_argument("--max-chars", type=int, default=8000)
+
+    p_answer_eval = sub.add_parser("orientation-answer-eval-prompts", help="build paired prompts for answer-quality evaluation")
+    p_answer_eval.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
+    p_answer_eval.add_argument("--max-items", type=int, default=20)
+    p_answer_eval.add_argument("--max-chars", type=int, default=8000)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -922,6 +928,19 @@ def main() -> None:
             evaluate_context_pack(
                 paths,
                 cases,
+                max_items=args.max_items,
+                max_chars=args.max_chars,
+            ),
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-answer-eval-prompts":
+        case_payload = Path(args.cases).read_text(encoding="utf-8") if Path(args.cases).is_file() else args.cases
+        _print(
+            build_answer_eval_prompts(
+                paths,
+                json.loads(case_payload),
                 max_items=args.max_items,
                 max_chars=args.max_chars,
             ),
