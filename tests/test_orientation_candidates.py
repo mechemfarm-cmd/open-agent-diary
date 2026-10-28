@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_diary.config import Paths
 from agent_diary.orientation import create_run, set_consent
 from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
+from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
 from agent_diary.orientation_import import import_approved_history
 
 
@@ -64,7 +65,12 @@ class TestOrientationCandidates(unittest.TestCase):
         candidate_id = result["candidates"][0]["candidate_id"]
         approved = set_candidate_status(self.paths, "candidate-run", candidate_id, "approved")
         self.assertEqual(approved["status"], "approved")
+        knowledge = list_knowledge(self.paths)
+        self.assertEqual(len(knowledge), 1)
+        self.assertEqual(search_knowledge(self.paths, "migration")[0]["candidate_id"], candidate_id)
         self.assertEqual(len(list_candidates(self.paths, "candidate-run", status="approved")), 1)
+        set_knowledge_status(self.paths, candidate_id, "revoked")
+        self.assertEqual(search_knowledge(self.paths, "migration"), [])
         rejected_id = result["candidates"][1]["candidate_id"]
         set_candidate_status(self.paths, "candidate-run", rejected_id, "rejected")
         with self.assertRaises(ValueError):

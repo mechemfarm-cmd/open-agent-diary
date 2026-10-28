@@ -184,5 +184,16 @@ def set_candidate_status(paths: Paths, run_id: str, candidate_id: str, status: s
         raise ValueError("rejected candidates require regeneration before approval")
     item["status"] = status
     item["updated_at"] = _now()
+    if status == "approved":
+        from agent_diary.orientation_knowledge import materialize_candidate
+
+        materialize_candidate(paths, item)
+    elif status in {"rejected", "stale"}:
+        from agent_diary.orientation_knowledge import set_knowledge_status
+
+        try:
+            set_knowledge_status(paths, candidate_id, "superseded" if status == "stale" else "revoked")
+        except FileNotFoundError:
+            pass
     _write(_candidate_dir(paths) / f"{run_id}.json", body)
     return item

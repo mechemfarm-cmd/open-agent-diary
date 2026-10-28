@@ -25,6 +25,7 @@ from agent_diary.orientation_inventory import inventory_metadata, inventory_sour
 from agent_diary.orientation_preview import preview_approved_source
 from agent_diary.orientation_import import import_approved_history
 from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
+from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -252,6 +253,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_candidate_review.add_argument("--run-id", required=True)
     p_candidate_review.add_argument("--candidate-id", required=True)
     p_candidate_review.add_argument("--status", choices=["approved", "rejected", "stale"], required=True)
+
+    p_knowledge_list = sub.add_parser("orientation-knowledge-list", help="list approved orientation knowledge")
+    p_knowledge_list.add_argument("--status", choices=["active", "revoked", "superseded"], default="active")
+
+    p_knowledge_search = sub.add_parser("orientation-knowledge-search", help="search approved orientation only")
+    p_knowledge_search.add_argument("query")
+    p_knowledge_search.add_argument("--limit", type=int, default=10)
+
+    p_knowledge_revoke = sub.add_parser("orientation-knowledge-revoke", help="revoke approved orientation knowledge")
+    p_knowledge_revoke.add_argument("--candidate-id", required=True)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -866,6 +877,18 @@ def main() -> None:
     if args.command == "orientation-candidate-review":
         out = set_candidate_status(paths, args.run_id, args.candidate_id, args.status)
         _print(out, args.json)
+        return
+
+    if args.command == "orientation-knowledge-list":
+        _print({"knowledge": list_knowledge(paths, status=args.status)}, args.json)
+        return
+
+    if args.command == "orientation-knowledge-search":
+        _print({"knowledge": search_knowledge(paths, args.query, limit=args.limit)}, args.json)
+        return
+
+    if args.command == "orientation-knowledge-revoke":
+        _print(set_knowledge_status(paths, args.candidate_id, "revoked"), args.json)
         return
 
     if args.command == "search-work-trace":
