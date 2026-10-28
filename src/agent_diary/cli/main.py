@@ -26,6 +26,7 @@ from agent_diary.orientation_preview import preview_approved_source
 from agent_diary.orientation_import import import_approved_history
 from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
 from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
+from agent_diary.orientation_review import show_candidate
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -253,6 +254,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_candidate_review.add_argument("--run-id", required=True)
     p_candidate_review.add_argument("--candidate-id", required=True)
     p_candidate_review.add_argument("--status", choices=["approved", "rejected", "stale"], required=True)
+
+    p_candidate_show = sub.add_parser("orientation-candidate-show", help="show candidate evidence and resulting knowledge")
+    p_candidate_show.add_argument("--run-id", required=True)
+    p_candidate_show.add_argument("--candidate-id", required=True)
 
     p_knowledge_list = sub.add_parser("orientation-knowledge-list", help="list approved orientation knowledge")
     p_knowledge_list.add_argument("--status", choices=["active", "revoked", "superseded"], default="active")
@@ -877,6 +882,10 @@ def main() -> None:
     if args.command == "orientation-candidate-review":
         out = set_candidate_status(paths, args.run_id, args.candidate_id, args.status)
         _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidate-show":
+        _print(show_candidate(paths, args.run_id, args.candidate_id), args.json)
         return
 
     if args.command == "orientation-knowledge-list":

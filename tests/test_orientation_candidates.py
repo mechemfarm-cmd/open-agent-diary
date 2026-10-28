@@ -9,6 +9,7 @@ from agent_diary.config import Paths
 from agent_diary.orientation import create_run, set_consent
 from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
 from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
+from agent_diary.orientation_review import show_candidate
 from agent_diary.orientation_import import import_approved_history
 
 
@@ -59,6 +60,19 @@ class TestOrientationCandidates(unittest.TestCase):
         self.assertTrue(all(item["status"] == "pending" for item in result["candidates"]))
         self.assertTrue(all(item["source_entry_ids"] for item in result["candidates"]))
         self.assertIn("user_statement", {item["kind"] for item in result["candidates"]})
+
+    def test_review_view_combines_evidence_source_and_knowledge(self):
+        result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
+        candidate = next(item for item in result["candidates"] if item["kind"] == "user_statement")
+        before = show_candidate(self.paths, "candidate-run", candidate["candidate_id"])
+        self.assertEqual(before["candidate"]["status"], "pending")
+        self.assertIsNone(before["knowledge"])
+        self.assertEqual(before["source"]["consent"], "approved")
+        self.assertTrue(before["candidate"]["evidence"])
+        set_candidate_status(self.paths, "candidate-run", candidate["candidate_id"], "approved")
+        after = show_candidate(self.paths, "candidate-run", candidate["candidate_id"])
+        self.assertEqual(after["knowledge"]["status"], "active")
+        self.assertEqual(after["knowledge"]["source_entry_ids"], candidate["source_entry_ids"])
 
     def test_approval_and_rejection_are_explicit(self):
         result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
