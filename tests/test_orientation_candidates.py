@@ -10,6 +10,7 @@ from agent_diary.orientation import create_run, set_consent
 from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
 from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
 from agent_diary.orientation_review import show_candidate
+from agent_diary.orientation_context import build_context_pack
 from agent_diary.orientation_import import import_approved_history
 
 
@@ -73,6 +74,18 @@ class TestOrientationCandidates(unittest.TestCase):
         after = show_candidate(self.paths, "candidate-run", candidate["candidate_id"])
         self.assertEqual(after["knowledge"]["status"], "active")
         self.assertEqual(after["knowledge"]["source_entry_ids"], candidate["source_entry_ids"])
+
+    def test_context_pack_is_bounded_and_provenance_preserving(self):
+        result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
+        candidate = next(item for item in result["candidates"] if item["kind"] == "user_statement")
+        set_candidate_status(self.paths, "candidate-run", candidate["candidate_id"], "approved")
+        pack = build_context_pack(self.paths, max_items=1, max_chars=10_000)
+        self.assertEqual(pack["item_count"], 1)
+        self.assertEqual(pack["active_count"], 1)
+        self.assertEqual(pack["omitted_count"], 0)
+        self.assertEqual(pack["items"][0]["source"]["source_entry_ids"], candidate["source_entry_ids"])
+        with self.assertRaises(ValueError):
+            build_context_pack(self.paths, max_items=0)
 
     def test_approval_and_rejection_are_explicit(self):
         result = generate_candidates(self.paths, run_id="candidate-run", source_id="history")
