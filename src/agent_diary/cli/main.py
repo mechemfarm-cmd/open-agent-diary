@@ -83,6 +83,21 @@ def _print(output: dict, as_json: bool) -> None:
         print(output)
 
 
+def _load_json_argument(value: str) -> Any:
+    """Load inline JSON or a JSON file without treating long JSON as a path."""
+    text = str(value)
+    stripped = text.lstrip()
+    if stripped.startswith(("{", "[")):
+        return json.loads(text)
+    try:
+        path = Path(text)
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    return json.loads(text)
+
+
 def _format_doctor_report(report: dict, paths: Any) -> str:
     """Human-readable doctor output.
 
@@ -927,8 +942,7 @@ def main() -> None:
         return
 
     if args.command == "orientation-context-evaluate":
-        case_payload = Path(args.cases).read_text(encoding="utf-8") if Path(args.cases).is_file() else args.cases
-        cases = json.loads(case_payload)
+        cases = _load_json_argument(args.cases)
         _print(
             evaluate_context_pack(
                 paths,
@@ -941,11 +955,10 @@ def main() -> None:
         return
 
     if args.command == "orientation-answer-eval-prompts":
-        case_payload = Path(args.cases).read_text(encoding="utf-8") if Path(args.cases).is_file() else args.cases
         _print(
             build_answer_eval_prompts(
                 paths,
-                json.loads(case_payload),
+                _load_json_argument(args.cases),
                 max_items=args.max_items,
                 max_chars=args.max_chars,
             ),
@@ -954,9 +967,13 @@ def main() -> None:
         return
 
     if args.command == "orientation-answer-score":
-        case_payload = Path(args.cases).read_text(encoding="utf-8") if Path(args.cases).is_file() else args.cases
-        answer_payload = Path(args.answers).read_text(encoding="utf-8") if Path(args.answers).is_file() else args.answers
-        _print(score_paired_answers(json.loads(case_payload), json.loads(answer_payload)), args.json)
+        _print(
+            score_paired_answers(
+                _load_json_argument(args.cases),
+                _load_json_argument(args.answers),
+            ),
+            args.json,
+        )
         return
 
     if args.command == "search-work-trace":
