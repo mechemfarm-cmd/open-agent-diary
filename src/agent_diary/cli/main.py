@@ -31,6 +31,11 @@ from agent_diary.orientation_context import build_context_pack
 from agent_diary.orientation_evaluation import evaluate_context_pack
 from agent_diary.orientation_answer_evaluation import build_answer_eval_prompts
 from agent_diary.orientation_answer_scoring import score_paired_answers
+from agent_diary.orientation_eval_suite import (
+    load_case_set,
+    run_paired_evaluation,
+    validate_case_set,
+)
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -305,6 +310,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_answer_score = sub.add_parser("orientation-answer-score", help="score paired orientation answers")
     p_answer_score.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
     p_answer_score.add_argument("--answers", required=True, help="JSON array or path to paired answers")
+
+    p_eval_validate = sub.add_parser("orientation-eval-case-set-validate", help="validate an orientation evaluation case set")
+    p_eval_validate.add_argument("--cases", required=True, help="path to a case-set JSON file")
+
+    p_eval_run = sub.add_parser("orientation-eval-run", help="run one paired orientation evaluation into a dated report")
+    p_eval_run.add_argument("--cases", required=True, help="path to a case-set JSON file")
+    p_eval_run.add_argument("--answers", required=True, help="JSON array or path to paired answers")
+    p_eval_run.add_argument("--out", help="write the report JSON to this path")
+    p_eval_run.add_argument("--max-items", type=int, default=20)
+    p_eval_run.add_argument("--max-chars", type=int, default=8000)
+    p_eval_run.add_argument("--min-cases", type=int, default=5)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -974,6 +990,36 @@ def main() -> None:
             ),
             args.json,
         )
+        return
+
+    if args.command == "orientation-eval-case-set-validate":
+        case_set = load_case_set(args.cases)
+        _print(
+            {
+                "valid": True,
+                "case_set_version": case_set["case_set_version"],
+                "data_class": case_set["data_class"],
+                "case_count": len(case_set["cases"]),
+                "case_ids": [case["case_id"] for case in case_set["cases"]],
+            },
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-eval-run":
+        report = run_paired_evaluation(
+            paths,
+            load_case_set(args.cases),
+            _load_json_argument(args.answers),
+            max_items=args.max_items,
+            max_chars=args.max_chars,
+            min_cases=args.min_cases,
+        )
+        if args.out:
+            target = Path(args.out)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _print(report, args.json)
         return
 
     if args.command == "search-work-trace":
