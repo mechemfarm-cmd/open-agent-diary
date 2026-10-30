@@ -103,6 +103,14 @@ def _load_json_argument(value: str) -> Any:
     return json.loads(text)
 
 
+def _load_cases_argument(value: str) -> list[Any]:
+    """Accept either a bare case array or a validated case-set object."""
+    payload = _load_json_argument(value)
+    if isinstance(payload, dict):
+        return list(validate_case_set(payload)["cases"])
+    return payload
+
+
 def _format_doctor_report(report: dict, paths: Any) -> str:
     """Human-readable doctor output.
 
@@ -958,7 +966,7 @@ def main() -> None:
         return
 
     if args.command == "orientation-context-evaluate":
-        cases = _load_json_argument(args.cases)
+        cases = _load_cases_argument(args.cases)
         _print(
             evaluate_context_pack(
                 paths,
@@ -974,7 +982,7 @@ def main() -> None:
         _print(
             build_answer_eval_prompts(
                 paths,
-                _load_json_argument(args.cases),
+                _load_cases_argument(args.cases),
                 max_items=args.max_items,
                 max_chars=args.max_chars,
             ),
@@ -985,7 +993,7 @@ def main() -> None:
     if args.command == "orientation-answer-score":
         _print(
             score_paired_answers(
-                _load_json_argument(args.cases),
+                _load_cases_argument(args.cases),
                 _load_json_argument(args.answers),
             ),
             args.json,

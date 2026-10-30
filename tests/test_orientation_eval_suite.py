@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from agent_diary.cli.main import _load_cases_argument
 from agent_diary.config import default_paths
 from agent_diary.orientation_eval_suite import (
     MIN_CASES_FOR_VERDICT,
@@ -80,6 +81,18 @@ class ValidateCaseSetTests(unittest.TestCase):
             path.write_text(json.dumps(_case_set()), encoding="utf-8")
             result = load_case_set(path)
         self.assertEqual(len(result["cases"]), 1)
+
+
+class LoadCasesArgumentTests(unittest.TestCase):
+    def test_accepts_bare_case_array(self) -> None:
+        self.assertEqual(len(_load_cases_argument(json.dumps([_case()]))), 1)
+
+    def test_unwraps_validated_case_set(self) -> None:
+        self.assertEqual(len(_load_cases_argument(json.dumps(_case_set()))), 1)
+
+    def test_rejects_invalid_case_set(self) -> None:
+        with self.assertRaises(ValueError):
+            _load_cases_argument(json.dumps({"case_set_version": 1, "data_class": "nope", "cases": [_case()]}))
 
 
 class RunPairedEvaluationTests(unittest.TestCase):
