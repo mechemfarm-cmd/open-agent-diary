@@ -75,6 +75,19 @@ class ValidateCaseSetTests(unittest.TestCase):
         result = validate_case_set(_case_set(_case(note="why this case exists")))
         self.assertEqual(result["cases"][0]["note"], "why this case exists")
 
+    def test_rejects_negated_forbidden_phrase(self) -> None:
+        """A negated trap is produced by the answer that denies it, so it is not a trap."""
+        with self.assertRaises(ValueError):
+            validate_case_set(_case_set(_case(forbidden_facts=["never share runtime state"])))
+
+    def test_rejects_forbidden_phrase_overlapping_an_expected_fact(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_case_set(_case_set(_case(expected_facts=["concise reporting"], forbidden_facts=["concise"])))
+
+    def test_accepts_positive_trap_phrases(self) -> None:
+        result = validate_case_set(_case_set(_case(forbidden_facts=["start coding immediately"])))
+        self.assertEqual(result["cases"][0]["forbidden_facts"], ["start coding immediately"])
+
     def test_load_case_set_reads_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cases.json"

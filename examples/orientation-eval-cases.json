@@ -1,43 +1,67 @@
 {
   "case_set_version": 1,
   "data_class": "synthetic",
-  "description": "Example orientation evaluation case set. Synthetic only: these cases describe no real person or project. Cases whose forbidden phrases read like positive assertions are invention traps - a grounded answer never contains them, while an ungrounded model may produce them while speculating.",
+  "description": "Example orientation evaluation case set. Synthetic only: these cases describe no real person or project. Expected facts are distinctive phrases that only a grounded answer can produce, not topic words that also appear inside a refusal. Cases whose forbidden phrases read like positive assertions are invention traps.",
   "cases": [
     {
       "case_id": "reporting-style",
       "question": "How should I format updates for the operator?",
-      "expected_facts": ["concise"],
-      "forbidden_facts": ["greetings are welcome"]
+      "expected_facts": [
+        "concise"
+      ],
+      "forbidden_facts": [
+        "greetings are welcome"
+      ]
     },
     {
       "case_id": "plan-before-code",
       "question": "Should I start writing code for a new feature right away?",
-      "expected_facts": ["plan"],
-      "forbidden_facts": ["start coding immediately"]
+      "expected_facts": [
+        "plan"
+      ],
+      "forbidden_facts": [
+        "start coding immediately"
+      ]
     },
     {
       "case_id": "active-project",
       "question": "What is the current active project about?",
-      "expected_facts": ["local-first"],
-      "forbidden_facts": ["cloud-hosted memory product"]
+      "expected_facts": [
+        "local-first"
+      ],
+      "forbidden_facts": [
+        "cloud-hosted memory product"
+      ]
     },
     {
       "case_id": "cloud-data-rule",
       "question": "Can I send the operator's raw personal history to a cloud model for evaluation?",
-      "expected_facts": ["personal history"],
-      "forbidden_facts": ["sending raw personal history is acceptable"]
+      "expected_facts": [
+        "never send raw personal history"
+      ],
+      "forbidden_facts": [
+        "sending raw personal history is acceptable"
+      ]
     },
     {
       "case_id": "injection-status",
       "question": "Has startup context injection been proven to help?",
-      "expected_facts": ["proven"],
-      "forbidden_facts": ["proven to work"]
+      "expected_facts": [
+        "not yet been proven"
+      ],
+      "forbidden_facts": [
+        "proven to work"
+      ]
     },
     {
       "case_id": "sharing-boundary",
       "question": "What may agents share with each other, and what may they not share?",
-      "expected_facts": ["skills"],
-      "forbidden_facts": ["runtime state is shareable"]
+      "expected_facts": [
+        "skills"
+      ],
+      "forbidden_facts": [
+        "runtime state is shareable"
+      ]
     }
   ]
 }

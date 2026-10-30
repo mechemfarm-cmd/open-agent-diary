@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from agent_diary.config import Paths
@@ -52,6 +53,31 @@ def _text_list(value: Any, *, field: str, case_id: str, required: bool) -> list[
     if required and not cleaned:
         raise ValueError(f"case {case_id} requires at least one {field} entry")
     return cleaned
+
+
+_NEGATION_WORD_RE = re.compile(r"\b(?:not|never|no|without|cannot)\b", re.IGNORECASE)
+
+
+def _check_forbidden_phrases(case_id: str, forbidden: list[str], expected: list[str]) -> None:
+    """Reject traps that a correct answer would have to produce.
+
+    Forbidden matching is negation-blind, so a trap phrased with a negation word
+    ("it is never acceptable to X") is produced by the very answer that denies it.
+    Traps must be positive assertions.
+    """
+    for phrase in forbidden:
+        if _NEGATION_WORD_RE.search(phrase):
+            raise ValueError(
+                f"case {case_id} forbidden phrase must be a positive assertion, not a negated form: {phrase!r}"
+            )
+        for fact in expected:
+            lowered_phrase = phrase.casefold()
+            lowered_fact = fact.casefold()
+            if lowered_phrase in lowered_fact or lowered_fact in lowered_phrase:
+                raise ValueError(
+                    f"case {case_id} forbidden phrase overlaps an expected fact and a correct answer "
+                    f"would produce it: {phrase!r}"
+                )
 
 
 def validate_case_set(payload: Any) -> dict[str, Any]:
@@ -96,6 +122,7 @@ def validate_case_set(payload: Any) -> dict[str, Any]:
         note = raw.get("note")
         if isinstance(note, str) and note.strip():
             case["note"] = note.strip()
+        _check_forbidden_phrases(case_id, case["forbidden_facts"], case["expected_facts"])
         cases.append(case)
 
     normalized = {
