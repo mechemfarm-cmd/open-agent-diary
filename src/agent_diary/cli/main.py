@@ -17,6 +17,12 @@ from agent_diary.cli.openclaw_work_trace_import import (
     import_openclaw_work_trace,
 )
 from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_session_export, build_openclaw_telegram_direct_transcript
+from agent_diary.cli.onboarding import (
+    add_onboarding_parsers,
+    handle as handle_onboarding_command,
+    handles as handles_onboarding,
+)
+from agent_diary.onboarding_state import OnboardingError
 from agent_diary.config import default_paths
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.retrieval_metrics import summarize_events
@@ -679,6 +685,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ger = sub.add_parser("graph-enqueue-recent")
     p_ger.add_argument("--limit", type=int, default=50)
 
+    add_onboarding_parsers(sub)
+
     return parser
 
 
@@ -768,6 +776,24 @@ def main() -> None:
         )
 
     paths = default_paths()
+
+    if handles_onboarding(args.command):
+        # Dispatched before ensure_data_dirs: `init` decides where the data
+        # lives, so creating directories for a not-yet-chosen root would write
+        # to the wrong place.
+        try:
+            handle_onboarding_command(
+                args,
+                resolve_root=lambda: paths.data_root,
+                printer=_print,
+            )
+        except OnboardingError as exc:
+            if args.json:
+                print(json.dumps({"error": "onboarding_error", "detail": str(exc)}))
+            else:
+                print(f"error: {exc}")
+            raise SystemExit(1)
+        return
 
     if args.command == "doctor":
         # Dispatched BEFORE ensure_data_dirs/bootstrap_sqlite on purpose. This
