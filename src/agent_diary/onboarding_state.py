@@ -63,6 +63,9 @@ class SourceState:
                 f"source {self.id!r} cannot be consented: it was not detected"
             )
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
 
 @dataclass
 class OnboardingState:
