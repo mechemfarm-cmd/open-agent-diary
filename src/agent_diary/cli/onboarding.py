@@ -1,8 +1,12 @@
 """CLI surface for onboarding.
 
-Deliberately small: two commands. The existing 71 subcommands are the tools;
-onboarding is the guided path through four of them. Keeping the surface narrow
-is the point — a new user should not need to know the other sixty-eight exist.
+Deliberately small: two commands. The existing subcommands are the tools;
+onboarding is the guided path through them. Keeping the surface narrow is the
+point — a new user should not need to know the others exist.
+
+Every emitted command includes the global ``--json`` flag and the explicit
+``--step``, so an agent can copy what ``next_action`` returns and run it
+verbatim rather than reconstructing argument order.
 """
 from __future__ import annotations
 
@@ -12,6 +16,10 @@ from typing import Any, Callable
 
 from agent_diary import onboarding
 from agent_diary.onboarding_state import OnboardingError, OnboardingState, STEPS
+
+# Steps that exist but are not built yet. Reported honestly rather than
+# pretending to have run.
+UNIMPLEMENTED = {"export", "preview", "import", "review", "connect"}
 
 
 def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
@@ -50,7 +58,7 @@ def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
     )
     p_onboard.add_argument(
         "--answer",
-        help='JSON object mapping source id to content|metadata|denied',
+        help="JSON object mapping source id to content|metadata|denied",
     )
     p_onboard.add_argument(
         "--status",
@@ -81,8 +89,7 @@ def handle(
         return
 
     # -- onboard ------------------------------------------------------------
-    data_root = resolve_root()
-    state = OnboardingState.load(data_root)
+    state = OnboardingState.load(resolve_root())
 
     if getattr(args, "status", False):
         printer(onboarding.status(state), json_out)
@@ -91,7 +98,6 @@ def handle(
     step = getattr(args, "step", None) or state.step
 
     if step != state.step:
-        # Running an explicit step out of order is a mistake worth naming.
         printer(
             {
                 "error": "out_of_order",
@@ -106,33 +112,58 @@ def handle(
         printer(onboarding.run_init(), json_out)
         return
 
-    if step == "consent":
-        answers = json.loads(getattr(args, "answer", None) or "{}")
-        out = onboarding.run_consent(state, answers)
-        if out.get("status") in {"consented", "nothing_to_consent"}:
-            state.advance("preview")
-            state.save()
-            out["advanced_to"] = state.step
-        printer(out, json_out)
-        return
-
     if step == "discover":
         out = onboarding.run_discover(state)
-        state.advance("consent")
-        state.save()
-        out["advanced_to"] = state.step
+        _advance(state, "consent", out)
         printer(out, json_out)
         return
 
-    # Remaining steps are implemented in their own tasks; report the contract
-    # rather than pretending to have run them.
+    if step == "consent":
+        try:
+            answers = json.loads(getattr(args, "answer", None) or "{}")
+        except ValueError as exc:
+            printer(
+                {"error": "bad_answer", "detail": f"--answer is not valid JSON: {exc}"},
+                json_out,
+            )
+            raise SystemExit(2)
+        if not isinstance(answers, dict):
+            printer(
+                {"error": "bad_answer", "detail": "--answer must be a JSON object"},
+                json_out,
+            )
+            raise SystemExit(2)
+
+        out = onboarding.run_consent(state, answers)
+        if out.get("status") in {"consented", "nothing_to_consent", "already_consented"}:
+            _advance(state, "export", out)
+        printer(out, json_out)
+        return
+
+    if step in UNIMPLEMENTED:
+        printer(
+            {
+                "status": "not_implemented",
+                "step": step,
+                "purpose": onboarding.STEP_PURPOSE.get(step, ""),
+                "action": onboarding.next_action(state),
+            },
+            json_out,
+        )
+        raise SystemExit(3)
+
     printer(
-        {
-            "status": "not_implemented",
-            "step": step,
-            "purpose": onboarding.STEP_PURPOSE.get(step, ""),
-            "action": onboarding.next_action(state),
-        },
+        {"status": "nothing_to_do", "step": step, "action": onboarding.next_action(state)},
         json_out,
     )
-    raise SystemExit(3)
+
+
+def _advance(state: OnboardingState, to: str, out: dict) -> None:
+    """Advance the persisted state and report where it landed."""
+    try:
+        state.advance(to)
+    except OnboardingError as exc:
+        out["advance_error"] = str(exc)
+        return
+    state.save()
+    out["advanced_to"] = state.step

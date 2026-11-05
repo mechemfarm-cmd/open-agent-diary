@@ -67,9 +67,12 @@ def detect_hermes(path: Path) -> tuple[bool, int, str | None, str | None]:
     finally:
         connection.close()
     if not row:
+        # A reachable database with no aggregate row is not a Hermes store.
         return (False, 0, None, None)
     count = int(row[0] or 0)
-    return (count > 0, count, _iso(row[1]), _iso(row[2]))
+    # A valid store with zero sessions is still a store. Reporting it as absent
+    # would make an empty diary indistinguishable from a missing one.
+    return (True, count, _iso(row[1]), _iso(row[2]))
 
 
 def detect(source: Source, *, path: str | Path | None = None) -> SourceState:

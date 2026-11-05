@@ -1,42 +1,110 @@
 """Onboarding steps: one implementation, two front-ends.
 
-Each step function is pure orchestration over state that already exists. The
-human walkthrough and the agent's JSON interface call the same functions; the
-only difference is whether a question is rendered for a person or returned as
-data for an agent.
+Each step is orchestration over state that already exists. The human
+walkthrough and the agent's JSON interface call the same functions; the only
+difference is whether a question is rendered for a person or returned as data.
 
-The contract that makes agent-driving safe is `next_action`: it returns a
-machine-readable description of what to do next, and sets `needs_human` only
-for decisions that genuinely belong to the user — consent scope, above all.
+Invariants, all of which the architecture review asked for:
+
+- Every step resolves paths from ``state.data_root``. No step calls bare
+  ``default_paths()``, because ambient resolution can point at a different
+  diary than the one the user chose.
+- ``needs_human`` is true only for decisions that belong to the user.
+- Steps are idempotent: running a completed step again returns the existing
+  result instead of re-deciding.
+- Steps with nothing to do report a no-op and advance along the linear order,
+  so the sequence stays predictable.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import tempfile
 
-from agent_diary.config import config_file_path, default_paths
+from agent_diary.config import default_paths
 from agent_diary.onboarding_sources import describe, discover
 from agent_diary.onboarding_state import (
     OnboardingError,
     OnboardingState,
     STEPS,
+    SUPPORTED_KINDS,
 )
 
 PROPOSED_ROOT = "~/.local/share/agent-diary"
 
-# What each step is for, in plain language. Used by the human front-end and
-# echoed in JSON so an agent can explain itself without inventing wording.
 STEP_PURPOSE = {
     "init": "Choose where your diary lives, and create it.",
     "discover": "Look for history worth importing — without reading it yet.",
     "consent": "Decide which sources may be imported, and at what scope.",
+    "export": "Write the approved history to a transcript file the diary can read.",
     "preview": "See a real sample of what would be imported.",
     "import": "Bring the approved history in.",
     "review": "Approve which derived facts become lasting knowledge.",
     "connect": "Point your agent at the diary so it recalls from it.",
     "done": "Onboarding is complete.",
 }
+
+# Orientation kinds, for sources we can actually represent.
+ORIENTATION_KIND = {"hermes": "hermes_history"}
+
+# The adapter format the exporter produces.
+EXPORT_FORMAT = "generic-message-jsonl"
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def paths_for(state: OnboardingState):
+    """The only correct way for a step to reach storage."""
+    return default_paths(data_root=Path(state.data_root))
+
+
+def _atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
+    """Write via unique temp file plus replace, so a crash can't truncate."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    )
+    tmp_name = handle.name
+    try:
+        with handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _read_config(path: Path) -> dict | None:
+    """Read the config file. Malformed or empty means 'not configured'."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _configured_root(payload: dict | None) -> str | None:
+    if not payload:
+        return None
+    value = payload.get("data_root")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -50,26 +118,28 @@ def run_init(
     accept_proposal: bool = False,
     force: bool = False,
 ) -> dict:
-    """Resolve and persist the data root, then create the diary.
+    """Resolve and persist the data root, create the diary, report its health.
 
-    Never adopts a default silently. Without an explicit choice (or an explicit
+    Never adopts a default silently: without an explicit choice (or an explicit
     acceptance of the proposal) this reports that a human decision is needed.
     """
-    existing = config_file_path()
-    if existing.exists() and not force:
-        try:
-            current = json.loads(existing.read_text(encoding="utf-8"))
-            resolved = Path(current.get("data_root", "")).expanduser()
-        except (OSError, ValueError):
-            resolved = None
-        if resolved is not None and str(resolved):
+    from agent_diary.config import config_file_path
+
+    config_path = config_file_path()
+
+    if config_path.exists() and not force:
+        existing = _configured_root(_read_config(config_path))
+        if existing:
+            resolved = Path(existing).expanduser()
             return {
                 "status": "already_initialized",
                 "data_root": str(resolved),
-                "config": str(existing),
+                "config": str(config_path),
                 "next": "discover",
                 "changed": False,
             }
+        # An empty or malformed config is not "initialized" — fall through and
+        # let the user choose, rather than silently adopting Path(".").
 
     if data_root is None:
         proposal = Path(PROPOSED_ROOT).expanduser()
@@ -91,27 +161,75 @@ def run_init(
     resolved = Path(data_root).expanduser().resolve()
     resolved.mkdir(parents=True, exist_ok=True)
 
-    config_file_path().parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "data_root": str(resolved)}
-    config_file_path().write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    _atomic_write_text(
+        config_path,
+        json.dumps({"version": 1, "data_root": str(resolved)}, indent=2, sort_keys=True)
+        + "\n",
     )
-    os.chmod(config_file_path(), 0o600)
 
     state = OnboardingState.load(resolved)
     state.data_root = str(resolved)
     if state.step == "init":
-        # init is finished the moment the root exists; leaving the state at
-        # 'init' would make an agent repeat a step that already succeeded.
         state.advance("discover")
     state.save()
+
+    scaffold = _scaffold(paths_for(state))
 
     return {
         "status": "initialized",
         "data_root": str(resolved),
-        "config": str(config_file_path()),
+        "config": str(config_path),
+        "scaffold": scaffold,
+        "doctor": _run_doctor(paths_for(state)),
         "next": "discover",
         "changed": True,
+    }
+
+
+def _scaffold(paths) -> dict:
+    """Create the diary's internal layout so a fresh install is usable.
+
+    A root directory alone is not a diary: without these, the first real write
+    fails and `doctor` reports eight missing paths.
+    """
+    from agent_diary.index.sqlite_index import bootstrap_sqlite
+
+    directories = [
+        paths.entries_dir,
+        paths.work_trace_dir,
+        paths.overlays_dir,
+        paths.artifacts_dir,
+        paths.imports_dir,
+        paths.index_dir,
+        paths.config_dir,
+        paths.archive_dir,
+    ]
+    created = []
+    for directory in directories:
+        if not directory.exists():
+            directory.mkdir(parents=True, exist_ok=True)
+            created.append(str(directory))
+    bootstrap_sqlite(paths.sqlite_path)
+    return {
+        "directories_created": len(created),
+        "database": str(paths.sqlite_path),
+        "database_created": paths.sqlite_path.exists(),
+    }
+
+
+def _run_doctor(paths) -> dict:
+    """Health check after the root exists. Failure is reported, not raised."""
+    try:
+        from agent_diary.service.doctor import run_doctor
+
+        report = run_doctor(paths)
+    except Exception as exc:  # doctor must never break init
+        return {"status": "unavailable", "detail": str(exc)}
+    summary = report.get("summary", {}) if isinstance(report, dict) else {}
+    return {
+        "status": "ok" if not summary.get("error_count") else "issues",
+        "error_count": summary.get("error_count", 0),
+        "warning_count": summary.get("warning_count", 0),
     }
 
 
@@ -138,10 +256,6 @@ def run_discover(state: OnboardingState, *, source_paths: dict[str, str] | None 
 # consent
 # ---------------------------------------------------------------------------
 
-# Only sources the orientation layer can represent today. Anything else is
-# reported as unsupported rather than silently mapped onto a kind it isn't.
-SUPPORTED_CONSENT_KINDS = {"hermes": "hermes_history"}
-
 
 def run_consent(
     state: OnboardingState,
@@ -154,28 +268,51 @@ def run_consent(
     `answers` maps source id to one of content / metadata / denied. A source
     with no answer stays pending and the step stays put — consent is never
     inferred from silence.
+
+    Idempotent: if the run already exists and every actionable source has a
+    decision, this returns the existing outcome instead of re-deciding.
     """
-    from agent_diary.config import default_paths
-    from agent_diary.orientation import create_run, set_consent
+    from agent_diary.orientation import create_run, load_run, set_consent
 
     answers = answers or {}
+    resolved_paths = paths or paths_for(state)
+
     detected = [s for s in state.sources if s.detected]
-    if not detected:
+    actionable = [s for s in detected if s.kind in SUPPORTED_KINDS]
+    unsupported = [s.id for s in detected if s.kind not in SUPPORTED_KINDS]
+
+    # Unsupported sources are explicitly unavailable, not silently pending.
+    for s in detected:
+        if s.kind not in SUPPORTED_KINDS and s.decision == "pending":
+            s.decision = "unavailable"
+
+    if not actionable:
+        state.save()
         return {
             "status": "nothing_to_consent",
-            "detail": "No sources were detected, so there is nothing to import.",
+            "detail": "No importable sources were detected, so there is nothing to consent.",
+            "unsupported": unsupported,
             "needs_human": False,
-            "next": "review",
+            "no_op_steps": ["export", "preview", "import", "review"],
+            "next": "export",
         }
 
-    unsupported = [
-        s.id for s in detected if s.id not in SUPPORTED_CONSENT_KINDS
-    ]
-    actionable = [s for s in detected if s.id in SUPPORTED_CONSENT_KINDS]
+    # Idempotence: already decided means report, don't re-decide.
+    already = [s for s in actionable if s.decision != "pending"]
+    if state.orientation_run_id and len(already) == len(actionable):
+        return {
+            "status": "already_consented",
+            "run_id": state.orientation_run_id,
+            "recorded": {s.id: s.requested_scope or "denied" for s in actionable},
+            "unsupported": unsupported,
+            "needs_human": False,
+            "next": "export",
+        }
 
     answered = {sid: v for sid, v in answers.items() if sid in {s.id for s in actionable}}
     missing = [s.id for s in actionable if s.id not in answered]
     if missing:
+        state.save()
         return {
             "status": "needs_human",
             "needs_human": True,
@@ -183,28 +320,25 @@ def run_consent(
             "awaiting": missing,
             "options": ["content", "metadata", "denied"],
             "unsupported": unsupported,
-            "detail": "Consent is not inferred from silence; every detected source needs an answer.",
+            "detail": "Consent is not inferred from silence; every importable source needs an answer.",
         }
 
     invalid = {
         sid: v for sid, v in answered.items() if v not in {"content", "metadata", "denied"}
     }
     if invalid:
+        state.save()
         return {
             "status": "invalid_answer",
             "detail": f"unknown scope(s): {invalid}; expected content, metadata or denied",
             "needs_human": True,
+            "next": "consent",
         }
 
-    resolved_paths = paths or default_paths()
-
-    # The run is created with the scope each source was granted; set_consent
-    # then records the decision. Reusing the orientation layer means the
-    # consent record is the same one every other diary command understands.
     sources = [
         {
             "source_id": s.id,
-            "kind": SUPPORTED_CONSENT_KINDS[s.id],
+            "kind": ORIENTATION_KIND[s.id],
             "locator": s.path,
             "scope": answered[s.id] if answered[s.id] != "denied" else "metadata",
         }
@@ -213,22 +347,33 @@ def run_consent(
 
     if state.orientation_run_id:
         run_id = state.orientation_run_id
+        try:
+            load_run(resolved_paths, run_id)
+        except FileNotFoundError:
+            created = create_run(resolved_paths, sources)
+            run_id = created["run_id"]
+            state.orientation_run_id = run_id
     else:
-        run = create_run(resolved_paths, sources)
-        run_id = run["run_id"]
+        created = create_run(resolved_paths, sources)
+        run_id = created["run_id"]
         state.orientation_run_id = run_id
 
     recorded = {}
     for s in actionable:
         decision = "approved" if answered[s.id] != "denied" else "rejected"
-        set_consent(resolved_paths, run_id, s.id, decision)
-        s.consent = (
-            "content"
-            if answered[s.id] == "content"
-            else "metadata"
-            if answered[s.id] == "metadata"
-            else "denied"
-        )
+        try:
+            set_consent(resolved_paths, run_id, s.id, decision)
+        except ValueError:
+            # Already decided in the manifest — reconcile rather than fail.
+            run = load_run(resolved_paths, run_id)
+            entry = next(
+                (x for x in run.get("sources", []) if x.get("source_id") == s.id), None
+            )
+            if entry is None:
+                raise
+            decision = str(entry.get("consent", decision))
+        s.requested_scope = None if answered[s.id] == "denied" else answered[s.id]
+        s.decision = decision
         recorded[s.id] = answered[s.id]
 
     state.save()
@@ -238,7 +383,7 @@ def run_consent(
         "recorded": recorded,
         "unsupported": unsupported,
         "needs_human": False,
-        "next": "preview",
+        "next": "export",
     }
 
 
@@ -269,11 +414,11 @@ def next_action(state: OnboardingState) -> dict:
         action["hint"] = "A wrong data root looks identical to lost memory, so this is the user's call."
 
     elif step == "discover":
-        action["command"] = "agent-diary onboard --step discover"
+        action["command"] = "agent-diary --json onboard --step discover"
 
     elif step == "consent":
         pending = state.pending_human_questions()
-        action["command"] = "agent-diary onboard --step consent"
+        action["command"] = "agent-diary --json onboard --step consent --answer '<json>'"
         if pending:
             action["needs_human"] = True
             action["question"] = "Which sources may be imported, and at what scope?"
@@ -283,14 +428,17 @@ def next_action(state: OnboardingState) -> dict:
         else:
             action["blockers"].append("no sources remain pending a decision")
 
+    elif step == "export":
+        action["command"] = "agent-diary --json onboard --step export"
+
     elif step == "preview":
-        action["command"] = "agent-diary onboard --step preview --confirm"
+        action["command"] = "agent-diary --json onboard --step preview --confirm"
 
     elif step == "import":
-        action["command"] = "agent-diary onboard --step import"
+        action["command"] = "agent-diary --json onboard --step import"
 
     elif step == "review":
-        action["command"] = "agent-diary onboard --step review"
+        action["command"] = "agent-diary --json onboard --step review"
         proposed = state.candidates.get("proposed", 0)
         if proposed:
             action["needs_human"] = True
@@ -298,7 +446,7 @@ def next_action(state: OnboardingState) -> dict:
             action["candidates"] = dict(state.candidates)
 
     elif step == "connect":
-        action["command"] = "agent-diary onboard --step connect"
+        action["command"] = "agent-diary --json onboard --step connect"
 
     elif step == "done":
         action["command"] = None
@@ -319,7 +467,9 @@ def status(state: OnboardingState) -> dict:
                 "id": s.id,
                 "detected": s.detected,
                 "sessions": s.sessions,
-                "consent": s.consent,
+                "decision": s.decision,
+                "requested_scope": s.requested_scope,
+                "content_access_granted": s.content_access_granted,
             }
             for s in state.sources
         ],

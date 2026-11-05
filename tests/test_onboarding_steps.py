@@ -175,7 +175,7 @@ def test_next_action_at_discover_is_agent_runnable(sandbox):
     state.step = "discover"
     action = onboarding.next_action(state)
     assert action["needs_human"] is False
-    assert action["command"] == "agent-diary onboard --step discover"
+    assert action["command"] == "agent-diary --json onboard --step discover"
 
 
 def test_consent_always_needs_a_human_and_never_offers_a_default(sandbox):
@@ -195,7 +195,13 @@ def test_consent_is_runnable_once_decided(sandbox):
     state = OnboardingState.new(sandbox / "diary")
     state.step = "consent"
     state.sources = [
-        SourceState(id="hermes", kind="hermes_sqlite", detected=True, sessions=3, consent="denied")
+        SourceState(
+            id="hermes",
+            kind="hermes_sqlite",
+            detected=True,
+            sessions=3,
+            decision="rejected",
+        )
     ]
     action = onboarding.next_action(state)
     assert action["needs_human"] is False

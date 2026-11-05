@@ -43,8 +43,10 @@ def test_state_file_is_private(tmp_path):
 def test_save_leaves_no_temp_file(tmp_path):
     state = OnboardingState.new(tmp_path / "diary")
     path = state.save()
-    siblings = [p.name for p in path.parent.iterdir()]
-    assert siblings == [path.name]
+    leftovers = [p.name for p in path.parent.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+    # A lock file is expected and is not a temporary write target.
+    assert path.name in [p.name for p in path.parent.iterdir()]
 
 
 def test_corrupt_state_raises_rather_than_resetting(tmp_path):
@@ -95,21 +97,65 @@ def test_terminal_step_has_no_transitions(tmp_path):
         state.advance("consent")
 
 
-def test_consent_requires_detection():
+def test_decision_requires_detection():
     with pytest.raises(OnboardingError):
-        SourceState(id="hermes", kind="hermes_sqlite", detected=False, consent="content")
+        SourceState(
+            id="hermes",
+            kind="hermes_sqlite",
+            detected=False,
+            decision="approved",
+            requested_scope="content",
+        )
 
 
-def test_consent_rejects_unknown_value():
+def test_scope_rejects_unknown_value():
     with pytest.raises(OnboardingError):
-        SourceState(id="hermes", kind="hermes_sqlite", detected=True, consent="everything")
+        SourceState(
+            id="hermes", kind="hermes_sqlite", detected=True, requested_scope="everything"
+        )
+
+
+def test_approval_requires_a_scope():
+    with pytest.raises(OnboardingError):
+        SourceState(id="hermes", kind="hermes_sqlite", detected=True, decision="approved")
+
+
+def test_content_access_requires_approval_and_content_scope():
+    requested_only = SourceState(
+        id="hermes", kind="hermes_sqlite", detected=True, requested_scope="content"
+    )
+    assert requested_only.content_access_granted is False
+
+    metadata_only = SourceState(
+        id="hermes",
+        kind="hermes_sqlite",
+        detected=True,
+        decision="approved",
+        requested_scope="metadata",
+    )
+    assert metadata_only.content_access_granted is False
+
+    both = SourceState(
+        id="hermes",
+        kind="hermes_sqlite",
+        detected=True,
+        decision="approved",
+        requested_scope="content",
+    )
+    assert both.content_access_granted is True
 
 
 def test_pending_human_questions_lists_undecided_sources():
     state = OnboardingState.new("/tmp/x")
     state.sources = [
-        SourceState(id="hermes", kind="hermes_sqlite", detected=True, consent="pending"),
-        SourceState(id="jsonl", kind="canonical_jsonl", detected=True, consent="denied"),
+        SourceState(id="hermes", kind="hermes_sqlite", detected=True),
+        SourceState(
+            id="jsonl",
+            kind="canonical_jsonl",
+            detected=True,
+            decision="rejected",
+        ),
         SourceState(id="telegram", kind="telegram_export", detected=False),
     ]
+    # Only supported kinds that are still undecided count as open questions.
     assert state.pending_human_questions() == ["hermes"]

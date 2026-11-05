@@ -53,10 +53,11 @@ def test_real_database_reports_count_and_window(tmp_path):
     assert oldest < newest
 
 
-def test_empty_database_is_not_detected(tmp_path):
+def test_empty_database_is_detected_with_zero_sessions(tmp_path):
+    """An empty diary is not a missing diary."""
     db = _make_hermes_db(tmp_path / "state.db", sessions=0)
     detected, count, _, _ = detect_hermes(db)
-    assert detected is False
+    assert detected is True
     assert count == 0
 
 
