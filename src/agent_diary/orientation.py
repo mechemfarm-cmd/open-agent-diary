@@ -181,6 +181,44 @@ def update_source_metadata(
     return run
 
 
+def set_source_locator(
+    paths: Paths,
+    run_id: str,
+    source_id: str,
+    locator: str,
+    *,
+    format_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Repoint a source at the artifact it should actually be read from.
+
+    Consent is recorded against the place the history *lives* (a database). The
+    readable transcript is produced later, by export, and preview/import must
+    read that instead. This changes the locator without touching consent, and
+    refuses an empty path so a source can never point at nothing.
+    """
+    target = str(locator).strip()
+    if not target:
+        raise ValueError("locator must not be empty")
+    run = load_run(paths, run_id)
+    source = next((item for item in run["sources"] if item.get("source_id") == source_id), None)
+    if source is None:
+        raise KeyError(f"orientation source not found: {source_id}")
+    source["locator"] = target
+    if format_name is not None or metadata:
+        current = source.get("metadata")
+        if not isinstance(current, dict):
+            current = {}
+        if format_name is not None:
+            current["format_name"] = format_name
+        if metadata:
+            current.update(metadata)
+        source["metadata"] = current
+    run["updated_at"] = _now()
+    _write_run(paths, run)
+    return run
+
+
 def set_consent(
     paths: Paths,
     run_id: str,

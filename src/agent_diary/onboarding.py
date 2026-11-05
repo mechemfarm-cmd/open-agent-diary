@@ -388,6 +388,73 @@ def run_consent(
 
 
 # ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+
+def run_export(state: OnboardingState, *, paths=None) -> dict:
+    """Materialise approved content into a readable transcript.
+
+    Content-scoped sources are exported; metadata-scoped ones have nothing to
+    export by definition, so the step is a no-op for them rather than an error.
+    The export module re-checks consent against the orientation run, so this
+    cannot be driven past a decision the user did not make.
+    """
+    from agent_diary.onboarding_export import export_hermes_history
+
+    resolved_paths = paths or paths_for(state)
+    run_id = state.orientation_run_id
+
+    content_sources = [
+        s for s in state.sources if s.detected and s.content_access_granted
+    ]
+    metadata_only = [
+        s
+        for s in state.sources
+        if s.detected and s.decision == "approved" and s.requested_scope == "metadata"
+    ]
+
+    if not content_sources:
+        return {
+            "status": "nothing_to_export",
+            "detail": (
+                "No source was approved for content, so there is nothing to export. "
+                "Metadata-only sources are imported without a transcript."
+            ),
+            "metadata_only": [s.id for s in metadata_only],
+            "needs_human": False,
+            "next": "preview",
+        }
+
+    if not run_id:
+        raise OnboardingError(
+            "consent recorded content access but no orientation run exists; "
+            "re-run the consent step"
+        )
+
+    results = []
+    for source in content_sources:
+        outcome = export_hermes_history(resolved_paths, run_id, source.id)
+        source.exported_path = outcome.get("exported_path")
+        source.format_name = outcome.get("format_name")
+        results.append(outcome)
+
+    exported = [r for r in results if r.get("status") == "exported"]
+    state.save()
+
+    return {
+        "status": "exported" if exported else "nothing_new",
+        "run_id": run_id,
+        "sources": results,
+        "messages_exported": sum(r.get("messages_exported", 0) for r in results),
+        "sessions_exported": sum(r.get("sessions_exported", 0) for r in results),
+        "metadata_only": [s.id for s in metadata_only],
+        "needs_human": False,
+        "next": "preview",
+    }
+
+
+# ---------------------------------------------------------------------------
 # the agent-facing contract
 # ---------------------------------------------------------------------------
 
@@ -430,6 +497,10 @@ def next_action(state: OnboardingState) -> dict:
 
     elif step == "export":
         action["command"] = "agent-diary --json onboard --step export"
+        if not any(s.content_access_granted for s in state.sources if s.detected):
+            action["blockers"].append(
+                "no source has content scope, so export has nothing to do"
+            )
 
     elif step == "preview":
         action["command"] = "agent-diary --json onboard --step preview --confirm"

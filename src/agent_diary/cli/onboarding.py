@@ -19,7 +19,7 @@ from agent_diary.onboarding_state import OnboardingError, OnboardingState, STEPS
 
 # Steps that exist but are not built yet. Reported honestly rather than
 # pretending to have run.
-UNIMPLEMENTED = {"export", "preview", "import", "review", "connect"}
+UNIMPLEMENTED = {"preview", "import", "review", "connect"}
 
 
 def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
@@ -137,6 +137,13 @@ def handle(
         out = onboarding.run_consent(state, answers)
         if out.get("status") in {"consented", "nothing_to_consent", "already_consented"}:
             _advance(state, "export", out)
+        printer(out, json_out)
+        return
+
+    if step == "export":
+        out = onboarding.run_export(state)
+        if out.get("status") in {"exported", "nothing_new", "nothing_to_export"}:
+            _advance(state, "preview", out)
         printer(out, json_out)
         return
 
