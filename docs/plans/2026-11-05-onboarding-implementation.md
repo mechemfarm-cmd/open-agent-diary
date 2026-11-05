@@ -1,11 +1,10 @@
 # Agent Diary Onboarding Implementation Plan
 
-**Status:** partially implemented on branch `feature/onboarding`.
-Built: `init`, `discover`, `consent`, the resumable state machine, source
-registry, agent-facing `next_action` contract and the CLI surface.
-Not built: `export` (Task 8a below), `preview`, `import`, `review`, `connect`.
-The `export` step is the next one — preview and import require a readable
-transcript file, not a database locator.
+**Status:** implemented on branch `feature/onboarding`. All steps are built:
+`init`, `discover`, `consent`, `export`, `preview`, `import`, `review`,
+`connect`, plus the resumable state machine, source registry, agent-facing
+`next_action` contract, CLI surface, end-to-end tests and documentation.
+Deviations from this plan are recorded in the commits that made them.
 
 **Reviewed:** the branch at `0eb4ac8` was reviewed architecturally before
 preview/import work continues; all findings were fixed in `b73c67f` and the
