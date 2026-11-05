@@ -16,12 +16,14 @@ shape, connect refuses rather than guessing.
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
 import shutil
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -239,6 +241,23 @@ def connect_hermes(*, config_path: Path | str | None = None, dry_run: bool = Fal
             "needs_human": True,
         }
 
+    if parsed.found and parsed.parseable and not _entry_matches(original):
+        # A real entry exists and we can read it, but it points somewhere else.
+        # Inserting ours would create a duplicate key in the user's file.
+        return {
+            "status": "existing_entry_mismatch",
+            "detail": (
+                f"mcp_servers already has an '{SERVER_NAME}' entry with a different "
+                f"command: {parsed.command!r} {parsed.args!r}. Refusing to add a second "
+                "key. Update it by hand or remove it, then re-run connect."
+            ),
+            "config_path": str(path),
+            "existing": {"command": parsed.command, "args": parsed.args},
+            "entry": entry,
+            "changed": False,
+            "needs_human": True,
+        }
+
     if _entry_matches(original):
         return {
             "status": "already_connected",
@@ -273,7 +292,26 @@ def connect_hermes(*, config_path: Path | str | None = None, dry_run: bool = Fal
     shutil.copy2(path, backup)
 
     try:
-        path.write_text(updated, encoding="utf-8")
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        )
+        tmp_name = handle.name
+        try:
+            with handle:
+                handle.write(updated)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(tmp_name, path.stat().st_mode & 0o777)
+            os.replace(tmp_name, path)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(tmp_name)
+            raise
         if not _entry_matches(path.read_text(encoding="utf-8")):
             raise ConnectError("written config failed verification")
     except BaseException:

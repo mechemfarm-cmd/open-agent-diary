@@ -17,6 +17,7 @@ Invariants, all of which the architecture review asked for:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,26 @@ def _atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
         except OSError:
             pass
         raise
+
+
+def _export_digest(export_path: str | None) -> str:
+    """A short, content-derived identity for one export transcript.
+
+    Import ids must change when a new export generation lands, otherwise the
+    second import reuses the first id and the new sessions never arrive. They
+    must also stay the same for identical content, so re-running import on the
+    same transcript is still a no-op.
+    """
+    if not export_path:
+        return "none"
+    path = Path(export_path)
+    if not path.is_file():
+        return "missing"
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:12]
 
 
 def _read_config(path: Path) -> dict | None:
@@ -525,6 +546,12 @@ def run_preview(
         "needs_human": not confirm,
         "next": "import",
     }
+    if metadata_only and not content_sources:
+        payload["detail"] = (
+            "No content was approved, so there is nothing to display. Confirming "
+            "proceeds with metadata only: session counts and date ranges are recorded, "
+            "no message text is imported."
+        )
     if not confirm:
         payload["question"] = (
             "Import the history shown above? Re-run this step with --confirm to import."
@@ -579,7 +606,10 @@ def run_import(state: OnboardingState, *, paths=None, dry_run: bool = False) -> 
                 run_id=state.orientation_run_id,
                 source_id=source.id,
                 format_name=source.format_name or EXPORT_FORMAT,
-                import_id=f"onboarding-{state.orientation_run_id}-{source.id}",
+                import_id=(
+                    f"onboarding-{state.orientation_run_id}-{source.id}"
+                    f"-{_export_digest(source.exported_path)}"
+                ),
                 dry_run=dry_run,
             )
         except Exception as exc:  # recorded, never swallowed
@@ -591,7 +621,9 @@ def run_import(state: OnboardingState, *, paths=None, dry_run: bool = False) -> 
     imported = sum(int(r.get("imported_count", 0)) for r in results)
     skipped = sum(int(r.get("skipped_count", 0)) for r in results)
     if not dry_run:
-        state.imported_entries = imported
+        # Cumulative across export generations. Overwriting would report 0 after
+        # an idempotent re-run and make status lie about what is in the diary.
+        state.imported_entries += imported
     state.save()
 
     payload = {
@@ -641,6 +673,17 @@ def run_review(
 
     resolved_paths = paths or paths_for(state)
     content_sources = [s for s in state.sources if s.detected and s.content_access_granted]
+
+    if not state.orientation_run_id or not content_sources:
+        # Without a run there are no candidates. Passing None into the candidate
+        # layer creates a "None.json" file for a run that does not exist.
+        return {
+            "status": "nothing_to_review",
+            "detail": "No orientation run exists, so there are no derived facts to review.",
+            "counts": {"proposed": 0, "approved": 0, "rejected": 0, "pending": 0},
+            "needs_human": False,
+            "next": "connect",
+        }
 
     generated = []
     failures = []

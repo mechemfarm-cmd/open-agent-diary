@@ -196,8 +196,13 @@ def handle(
 
     if step == "connect":
         out = onboarding.run_connect(state)
-        if out.get("status") in {"connected", "already_connected", "no_agent_detected", "config_missing"}:
+        # Only a real connection completes onboarding. A human-action status
+        # (missing config, no detected runtime, mismatched existing entry) must
+        # leave the machine at `connect`, never produce done+needs_human.
+        if out.get("status") in {"connected", "already_connected"}:
             _advance(state, "done", out)
+        else:
+            out["blocked_at"] = state.step
         printer(out, json_out)
         return
 

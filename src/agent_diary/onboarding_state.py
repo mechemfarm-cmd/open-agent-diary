@@ -238,18 +238,41 @@ class OnboardingState:
         if unknown:
             raise OnboardingError(f"unknown completed step(s): {', '.join(unknown)}")
         expected = list(STEPS[: STEPS.index(self.step)])
-        if self.completed != expected[: len(self.completed)]:
+        # `completed` means every step before the current one was completed.
+        # A prefix check would accept ["init"] at step "preview", silently
+        # skipping discover, consent and export.
+        if self.completed != expected:
             raise OnboardingError(
-                f"completed {self.completed!r} is not a prefix of the onboarding order"
-            )
-        if len(self.completed) > len(expected):
-            raise OnboardingError(
-                f"completed lists {len(self.completed)} steps but only "
-                f"{len(expected)} precede {self.step!r}"
+                f"completed {self.completed!r} does not match the steps preceding "
+                f"{self.step!r} (expected {expected!r})"
             )
         ids = [s.id for s in self.sources]
         if len(set(ids)) != len(ids):
             raise OnboardingError("onboarding sources must have unique ids")
+        self._validate_registry_identity()
+
+    def _validate_registry_identity(self) -> None:
+        """A source id and kind must be a pair the registry actually declares.
+
+        A hand-edited state pairing `openclaw` with `hermes_sqlite` would
+        otherwise reach the consent step and fail with a KeyError deep in the
+        orientation mapping instead of a controlled onboarding error.
+        """
+        from agent_diary.onboarding_sources import SOURCES  # local: avoids a cycle
+
+        registry = {source.id: source.kind for source in SOURCES}
+        for source in self.sources:
+            expected_kind = registry.get(source.id)
+            if expected_kind is None:
+                raise OnboardingError(
+                    f"unknown onboarding source id {source.id!r}; "
+                    f"registered ids: {', '.join(sorted(registry))}"
+                )
+            if source.kind != expected_kind:
+                raise OnboardingError(
+                    f"source {source.id!r} has kind {source.kind!r} but the registry "
+                    f"declares {expected_kind!r}"
+                )
 
     # -- persistence ---------------------------------------------------------
 
