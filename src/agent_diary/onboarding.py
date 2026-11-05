@@ -100,6 +100,10 @@ def run_init(
 
     state = OnboardingState.load(resolved)
     state.data_root = str(resolved)
+    if state.step == "init":
+        # init is finished the moment the root exists; leaving the state at
+        # 'init' would make an agent repeat a step that already succeeded.
+        state.advance("discover")
     state.save()
 
     return {

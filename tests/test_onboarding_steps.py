@@ -69,6 +69,16 @@ def test_init_creates_state_in_the_data_root(sandbox):
     assert (target / "config" / "onboarding.json").exists()
 
 
+def test_init_advances_state_to_discover(sandbox):
+    """Regression: leaving the state at 'init' made an agent repeat a step."""
+    target = sandbox / "diary"
+    onboarding.run_init(target)
+    state = OnboardingState.load(target)
+    assert state.step == "discover"
+    assert "init" in state.completed
+    assert onboarding.next_action(state)["needs_human"] is False
+
+
 # -- discover ---------------------------------------------------------------
 
 
