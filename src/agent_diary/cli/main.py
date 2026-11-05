@@ -23,7 +23,7 @@ from agent_diary.cli.onboarding import (
     handles as handles_onboarding,
 )
 from agent_diary.onboarding_state import OnboardingError
-from agent_diary.config import default_paths
+from agent_diary.config import default_paths, resolve_data_root
 from agent_diary.index.sqlite_index import bootstrap_sqlite
 from agent_diary.index.retrieval_metrics import summarize_events
 from agent_diary.orientation import create_run, list_runs, load_run, set_consent
@@ -775,7 +775,7 @@ def main() -> None:
             },
         )
 
-    paths = default_paths()
+    paths = default_paths(data_root=resolve_data_root())
 
     if handles_onboarding(args.command):
         # Dispatched before ensure_data_dirs: `init` decides where the data

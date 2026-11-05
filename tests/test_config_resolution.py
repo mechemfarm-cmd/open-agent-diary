@@ -82,3 +82,28 @@ def test_tilde_is_expanded(tmp_path, isolated_config, monkeypatch):
 
 def test_config_file_path_honours_xdg(tmp_path, isolated_config):
     assert config_file_path() == isolated_config
+
+
+def test_default_paths_ignores_user_config(tmp_path, isolated_config, monkeypatch):
+    """Library callers must not be affected by ambient user configuration.
+
+    Regression: letting default_paths() read the config file made the whole
+    test suite depend on whether the developer happened to have one set.
+    Precedence belongs in the CLI, which passes the resolved root in.
+    """
+    from agent_diary.config import default_paths
+
+    _write_config(isolated_config, tmp_path / "configured")
+    monkeypatch.chdir(tmp_path)
+    paths = default_paths()
+    assert paths.data_root == (tmp_path / "data").resolve()
+    assert paths.data_root != (tmp_path / "configured").resolve()
+
+
+def test_default_paths_still_honours_explicit_data_root(tmp_path, isolated_config):
+    from agent_diary.config import default_paths
+
+    _write_config(isolated_config, tmp_path / "configured")
+    explicit = tmp_path / "chosen"
+    paths = default_paths(data_root=explicit)
+    assert paths.data_root == explicit.resolve()

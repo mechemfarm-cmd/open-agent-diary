@@ -63,11 +63,21 @@ class Paths:
 
 
 def default_paths(root: Path | None = None, data_root: Path | None = None) -> Paths:
+    """Build the path set.
+
+    Deliberately does NOT consult the user config file: this function is called
+    from library code and tests, where ambient user configuration must not
+    change the answer. The CLI resolves the configured root explicitly and
+    passes it in, so precedence lives in exactly one place.
+    """
     project_root = (root or Path.cwd()).resolve()
     if data_root is not None:
         resolved = Path(data_root).expanduser().resolve()
     elif root is None:
-        resolved = resolve_data_root(cwd=project_root)
+        from_env = os.environ.get("AGENTDIARY_DATA")
+        resolved = (
+            Path(from_env).expanduser().resolve() if from_env else project_root / "data"
+        )
     else:
         resolved = project_root / "data"
     return Paths(
