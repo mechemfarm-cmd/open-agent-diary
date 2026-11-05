@@ -6,14 +6,18 @@ It is early working software. Do not promise a hosted service, automatic graph u
 
 ## Start and verify
 
-Run server and CLI commands from the intended data root: v0.1 uses `<current working directory>/data`.
+Resolve your data root before anything else. Precedence is: `--data-root` flag,
+then `AGENTDIARY_DATA`, then the config file, then the default proposal. Run
+`agent-diary init` to set it deliberately — it never adopts a root silently.
 
 ```bash
+agent-diary init --data-root /path/to/diary   # once, explicit
 agent-diary serve --host 127.0.0.1 --port 8041
 agent-diary doctor
 ```
 
-`doctor` is read-only. Missing data directories/database are expected before a first import or server bootstrap; investigate errors after initialization.
+`doctor` is read-only. After `init` it should report zero errors; a root with
+missing directories or no database has not been initialized.
 
 ## Recall protocol
 
@@ -38,6 +42,14 @@ Use `POST /list_beliefs` for read-only inspection. Do not use it as a substitute
 ## Privacy
 
 Bind to `127.0.0.1` unless the operator explicitly accepts private-network exposure. The v0.1 write API is unauthenticated. Never place secrets or real private data in public fixtures or documentation.
+
+## First-time setup
+
+`agent-diary onboard` walks a new user (or their agent) from an empty diary to
+one preloaded with their own history, consent-gated at every source. It is
+resumable and has a JSON interface: `agent-diary --json onboard --status`.
+
+See `docs/plans/2026-11-05-onboarding-implementation.md` for what is built so far.
 
 ## Read next
 
