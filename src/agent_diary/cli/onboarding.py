@@ -49,6 +49,10 @@ def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
         help="confirm a step that shows you something before advancing",
     )
     p_onboard.add_argument(
+        "--answer",
+        help='JSON object mapping source id to content|metadata|denied',
+    )
+    p_onboard.add_argument(
         "--status",
         action="store_true",
         help="report where onboarding is without changing anything",
@@ -100,6 +104,16 @@ def handle(
 
     if step == "init":
         printer(onboarding.run_init(), json_out)
+        return
+
+    if step == "consent":
+        answers = json.loads(getattr(args, "answer", None) or "{}")
+        out = onboarding.run_consent(state, answers)
+        if out.get("status") in {"consented", "nothing_to_consent"}:
+            state.advance("preview")
+            state.save()
+            out["advanced_to"] = state.step
+        printer(out, json_out)
         return
 
     if step == "discover":

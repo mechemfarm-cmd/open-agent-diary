@@ -135,6 +135,114 @@ def run_discover(state: OnboardingState, *, source_paths: dict[str, str] | None 
 
 
 # ---------------------------------------------------------------------------
+# consent
+# ---------------------------------------------------------------------------
+
+# Only sources the orientation layer can represent today. Anything else is
+# reported as unsupported rather than silently mapped onto a kind it isn't.
+SUPPORTED_CONSENT_KINDS = {"hermes": "hermes_history"}
+
+
+def run_consent(
+    state: OnboardingState,
+    answers: dict[str, str] | None = None,
+    *,
+    paths=None,
+) -> dict:
+    """Record the user's scope decision for each detected source.
+
+    `answers` maps source id to one of content / metadata / denied. A source
+    with no answer stays pending and the step stays put — consent is never
+    inferred from silence.
+    """
+    from agent_diary.config import default_paths
+    from agent_diary.orientation import create_run, set_consent
+
+    answers = answers or {}
+    detected = [s for s in state.sources if s.detected]
+    if not detected:
+        return {
+            "status": "nothing_to_consent",
+            "detail": "No sources were detected, so there is nothing to import.",
+            "needs_human": False,
+            "next": "review",
+        }
+
+    unsupported = [
+        s.id for s in detected if s.id not in SUPPORTED_CONSENT_KINDS
+    ]
+    actionable = [s for s in detected if s.id in SUPPORTED_CONSENT_KINDS]
+
+    answered = {sid: v for sid, v in answers.items() if sid in {s.id for s in actionable}}
+    missing = [s.id for s in actionable if s.id not in answered]
+    if missing:
+        return {
+            "status": "needs_human",
+            "needs_human": True,
+            "question": "Which sources may be imported, and at what scope?",
+            "awaiting": missing,
+            "options": ["content", "metadata", "denied"],
+            "unsupported": unsupported,
+            "detail": "Consent is not inferred from silence; every detected source needs an answer.",
+        }
+
+    invalid = {
+        sid: v for sid, v in answered.items() if v not in {"content", "metadata", "denied"}
+    }
+    if invalid:
+        return {
+            "status": "invalid_answer",
+            "detail": f"unknown scope(s): {invalid}; expected content, metadata or denied",
+            "needs_human": True,
+        }
+
+    resolved_paths = paths or default_paths()
+
+    # The run is created with the scope each source was granted; set_consent
+    # then records the decision. Reusing the orientation layer means the
+    # consent record is the same one every other diary command understands.
+    sources = [
+        {
+            "source_id": s.id,
+            "kind": SUPPORTED_CONSENT_KINDS[s.id],
+            "locator": s.path,
+            "scope": answered[s.id] if answered[s.id] != "denied" else "metadata",
+        }
+        for s in actionable
+    ]
+
+    if state.orientation_run_id:
+        run_id = state.orientation_run_id
+    else:
+        run = create_run(resolved_paths, sources)
+        run_id = run["run_id"]
+        state.orientation_run_id = run_id
+
+    recorded = {}
+    for s in actionable:
+        decision = "approved" if answered[s.id] != "denied" else "rejected"
+        set_consent(resolved_paths, run_id, s.id, decision)
+        s.consent = (
+            "content"
+            if answered[s.id] == "content"
+            else "metadata"
+            if answered[s.id] == "metadata"
+            else "denied"
+        )
+        recorded[s.id] = answered[s.id]
+
+    state.save()
+    return {
+        "status": "consented",
+        "run_id": run_id,
+        "recorded": recorded,
+        "unsupported": unsupported,
+        "needs_human": False,
+        "next": "preview",
+    }
+
+
+# ---------------------------------------------------------------------------
 # the agent-facing contract
 # ---------------------------------------------------------------------------
 

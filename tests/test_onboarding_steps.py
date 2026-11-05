@@ -94,6 +94,71 @@ def test_discover_records_sources_and_asks_nothing(sandbox, monkeypatch):
     assert state.sources[0].sessions == 7
 
 
+# -- consent ----------------------------------------------------------------
+
+
+def _approved_state(sandbox, detected=True):
+    state = OnboardingState.new(sandbox / "diary")
+    state.step = "consent"
+    state.sources = [
+        SourceState(
+            id="hermes",
+            kind="hermes_sqlite",
+            path=str(sandbox / "state.db"),
+            detected=detected,
+            sessions=3,
+        )
+    ]
+    return state
+
+
+def test_consent_is_never_inferred_from_silence(sandbox):
+    state = _approved_state(sandbox)
+    out = onboarding.run_consent(state, {})
+    assert out["status"] == "needs_human"
+    assert out["awaiting"] == ["hermes"]
+    assert state.orientation_run_id is None
+    assert state.sources[0].consent == "pending"
+
+
+def test_consent_with_nothing_detected_is_not_a_prompt(sandbox):
+    state = _approved_state(sandbox, detected=False)
+    out = onboarding.run_consent(state, {})
+    assert out["status"] == "nothing_to_consent"
+    assert out["needs_human"] is False
+
+
+def test_consent_rejects_an_unknown_scope(sandbox):
+    state = _approved_state(sandbox)
+    out = onboarding.run_consent(state, {"hermes": "everything"})
+    assert out["status"] == "invalid_answer"
+    assert state.orientation_run_id is None
+
+
+def test_consent_creates_an_orientation_run_and_records_it(sandbox):
+    from agent_diary.config import default_paths
+
+    state = _approved_state(sandbox)
+    paths = default_paths(data_root=sandbox / "diary")
+    out = onboarding.run_consent(state, {"hermes": "content"}, paths=paths)
+
+    assert out["status"] == "consented"
+    assert out["recorded"] == {"hermes": "content"}
+    assert state.orientation_run_id
+    assert state.sources[0].consent == "content"
+    assert paths.data_root.exists()
+
+
+def test_denied_source_is_recorded_as_denied(sandbox):
+    from agent_diary.config import default_paths
+
+    state = _approved_state(sandbox)
+    paths = default_paths(data_root=sandbox / "diary")
+    out = onboarding.run_consent(state, {"hermes": "denied"}, paths=paths)
+    assert out["status"] == "consented"
+    assert state.sources[0].consent == "denied"
+
+
 # -- the agent contract -----------------------------------------------------
 
 
