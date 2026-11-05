@@ -455,6 +455,306 @@ def run_export(state: OnboardingState, *, paths=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# preview
+# ---------------------------------------------------------------------------
+
+
+def run_preview(
+    state: OnboardingState,
+    *,
+    confirm: bool = False,
+    samples: int = 3,
+    paths=None,
+) -> dict:
+    """Show a real sample of what would be imported, then wait for confirmation.
+
+    Nothing is written. Without ``confirm`` the step stays put, so an agent
+    cannot advance past the one moment the user is asked to look at actual
+    content before it lands.
+    """
+    from agent_diary.orientation_preview import preview_approved_source
+
+    resolved_paths = paths or paths_for(state)
+    content_sources = [s for s in state.sources if s.detected and s.content_access_granted]
+    metadata_only = [
+        s
+        for s in state.sources
+        if s.detected and s.decision == "approved" and s.requested_scope == "metadata"
+    ]
+
+    previews = []
+    for source in content_sources:
+        format_name = source.format_name or EXPORT_FORMAT
+        previews.append(
+            preview_approved_source(
+                resolved_paths,
+                state.orientation_run_id,
+                source.id,
+                format_name=format_name,
+                max_messages=samples,
+            )
+        )
+
+    if not content_sources and not metadata_only:
+        return {
+            "status": "nothing_to_preview",
+            "detail": "No source was approved, so there is nothing to import.",
+            "needs_human": False,
+            "next": "import",
+        }
+
+    payload = {
+        "status": "confirmed" if confirm else "preview_ready",
+        "samples": [p.get("samples", []) for p in previews],
+        "counts": [
+            {
+                "source_id": p["source_id"],
+                "message_count": p["message_count"],
+                "author_role_counts": p.get("author_role_counts"),
+                "created_at_range": p.get("created_at_range"),
+            }
+            for p in previews
+        ],
+        "metadata_only": [
+            {
+                "source_id": s.id,
+                "detail": "Metadata only: session count and date range will be recorded, not content.",
+            }
+            for s in metadata_only
+        ],
+        "needs_human": not confirm,
+        "next": "import",
+    }
+    if not confirm:
+        payload["question"] = (
+            "Import the history shown above? Re-run this step with --confirm to import."
+        )
+        payload["command"] = "agent-diary --json onboard --step preview --confirm"
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# import
+# ---------------------------------------------------------------------------
+
+
+def run_import(state: OnboardingState, *, paths=None, dry_run: bool = False) -> dict:
+    """Import the approved history, reporting honest counts.
+
+    Idempotent: the import id is derived from the run and source, so a repeat
+    imports nothing new and says so. A failure is recorded and the state does
+    not advance — never report success for a partial import.
+    """
+    from agent_diary.orientation_import import import_approved_history
+
+    resolved_paths = paths or paths_for(state)
+    content_sources = [s for s in state.sources if s.detected and s.content_access_granted]
+    metadata_only = [
+        s
+        for s in state.sources
+        if s.detected and s.decision == "approved" and s.requested_scope == "metadata"
+    ]
+
+    if not content_sources:
+        return {
+            "status": "nothing_to_import",
+            "detail": (
+                "No source was approved for content. Metadata-only sources are "
+                "recorded by their export metadata, not imported as entries."
+            ),
+            "metadata_only": [s.id for s in metadata_only],
+            "imported_count": 0,
+            "skipped_count": 0,
+            "failures": [],
+            "needs_human": False,
+            "next": "review",
+        }
+
+    results = []
+    failures = []
+    for source in content_sources:
+        try:
+            outcome = import_approved_history(
+                resolved_paths,
+                run_id=state.orientation_run_id,
+                source_id=source.id,
+                format_name=source.format_name or EXPORT_FORMAT,
+                import_id=f"onboarding-{state.orientation_run_id}-{source.id}",
+                dry_run=dry_run,
+            )
+        except Exception as exc:  # recorded, never swallowed
+            failures.append({"source_id": source.id, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        source.imported_entries = int(outcome.get("imported_count", 0))
+        results.append(outcome)
+
+    imported = sum(int(r.get("imported_count", 0)) for r in results)
+    skipped = sum(int(r.get("skipped_count", 0)) for r in results)
+    if not dry_run:
+        state.imported_entries = imported
+    state.save()
+
+    payload = {
+        "status": "imported" if not failures else "partial_failure",
+        "run_id": state.orientation_run_id,
+        "sources": results,
+        "imported_count": imported,
+        "skipped_count": skipped,
+        "failures": failures,
+        "metadata_only": [s.id for s in metadata_only],
+        "needs_human": False,
+        "next": "review",
+    }
+    if failures:
+        payload["detail"] = (
+            "Some sources failed to import. The step has not advanced; "
+            "fix the cause and re-run import."
+        )
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# review
+# ---------------------------------------------------------------------------
+
+
+def run_review(
+    state: OnboardingState,
+    *,
+    approve: list[str] | None = None,
+    reject: list[str] | None = None,
+    auto_reject_unreviewed: bool = False,
+    paths=None,
+) -> dict:
+    """Turn derived candidates into knowledge only by explicit approval.
+
+    Generation is deterministic and repeatable; approval is not. A candidate
+    that nobody has looked at stays pending, and choosing to reject everything
+    unreviewed is a legitimate outcome — an empty knowledge base is correct
+    until a person says otherwise.
+    """
+    from agent_diary.orientation_candidates import (
+        generate_candidates,
+        list_candidates,
+        set_candidate_status,
+    )
+
+    resolved_paths = paths or paths_for(state)
+    content_sources = [s for s in state.sources if s.detected and s.content_access_granted]
+
+    generated = []
+    failures = []
+    for source in content_sources:
+        try:
+            generated.append(
+                generate_candidates(
+                    resolved_paths, run_id=state.orientation_run_id, source_id=source.id
+                )
+            )
+        except Exception as exc:
+            failures.append({"source_id": source.id, "error": f"{type(exc).__name__}: {exc}"})
+
+    pending = list_candidates(resolved_paths, state.orientation_run_id, status="pending")
+    decided = []
+
+    for candidate_id in approve or []:
+        decided.append(
+            set_candidate_status(resolved_paths, state.orientation_run_id, candidate_id, "approved")
+        )
+    for candidate_id in reject or []:
+        decided.append(
+            set_candidate_status(resolved_paths, state.orientation_run_id, candidate_id, "rejected")
+        )
+
+    if auto_reject_unreviewed:
+        for item in pending:
+            decided.append(
+                set_candidate_status(
+                    resolved_paths, state.orientation_run_id, item["candidate_id"], "rejected"
+                )
+            )
+
+    all_candidates = list_candidates(resolved_paths, state.orientation_run_id)
+    counts = {
+        "proposed": len(all_candidates),
+        "approved": sum(1 for c in all_candidates if c.get("status") == "approved"),
+        "rejected": sum(1 for c in all_candidates if c.get("status") == "rejected"),
+        "pending": sum(1 for c in all_candidates if c.get("status") == "pending"),
+    }
+    state.candidates = {
+        "proposed": counts["proposed"],
+        "approved": counts["approved"],
+        "rejected": counts["rejected"],
+    }
+    state.save()
+
+    remaining = counts["pending"]
+    payload = {
+        "status": "reviewed" if remaining == 0 else "needs_review",
+        "run_id": state.orientation_run_id,
+        "counts": counts,
+        "decided": [c.get("candidate_id") for c in decided],
+        "pending": [
+            {
+                "candidate_id": c.get("candidate_id"),
+                "kind": c.get("kind"),
+                "statement": c.get("statement"),
+                "confidence": c.get("confidence"),
+                "source_entry_ids": c.get("source_entry_ids", []),
+            }
+            for c in pending
+            if c.get("candidate_id") not in set(approve or []) | set(reject or [])
+        ][:50],
+        "failures": failures,
+        "needs_human": remaining > 0 and not auto_reject_unreviewed,
+        "next": "connect",
+    }
+    if payload["needs_human"]:
+        payload["question"] = (
+            f"{remaining} derived fact(s) await review. Approve, reject, or decline all."
+        )
+        payload["command"] = (
+            "agent-diary --json onboard --step review --approve <id> --reject <id> "
+            "  (or --auto-reject-unreviewed to import no derived knowledge)"
+        )
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# connect
+# ---------------------------------------------------------------------------
+
+
+def run_connect(state: OnboardingState, *, dry_run: bool = False) -> dict:
+    """Point the detected agent runtime at this diary.
+
+    Writing an agent's config is the most invasive step, so it is also the one
+    that backs up and verifies. An already-correct entry is left untouched.
+    """
+    from agent_diary.onboarding_connect import connect_hermes, hermes_config_path
+
+    config = hermes_config_path()
+    if not config.parent.is_dir():
+        return {
+            "status": "no_agent_detected",
+            "detail": (
+                f"No Hermes installation found at {config.parent}. The diary is ready; "
+                "configure your agent's MCP host manually using the entry below."
+            ),
+            "entry": {"command": "python3", "args": ["<repo>/agent-diary-mcp.py"]},
+            "http_equivalent": {"url": "http://127.0.0.1:8041", "auth": "none (loopback)"},
+            "needs_human": True,
+            "next": "done",
+        }
+
+    out = connect_hermes(config_path=config, dry_run=dry_run)
+    if out.get("status") in {"connected", "already_connected"}:
+        state.agent_connected = True
+        state.save()
+    return out
+
+
+# ---------------------------------------------------------------------------
 # the agent-facing contract
 # ---------------------------------------------------------------------------
 

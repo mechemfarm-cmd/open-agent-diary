@@ -19,7 +19,7 @@ from agent_diary.onboarding_state import OnboardingError, OnboardingState, STEPS
 
 # Steps that exist but are not built yet. Reported honestly rather than
 # pretending to have run.
-UNIMPLEMENTED = {"preview", "import", "review", "connect"}
+UNIMPLEMENTED: set[str] = set()
 
 
 def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
@@ -59,6 +59,23 @@ def add_onboarding_parsers(sub: argparse._SubParsersAction) -> None:
     p_onboard.add_argument(
         "--answer",
         help="JSON object mapping source id to content|metadata|denied",
+    )
+    p_onboard.add_argument(
+        "--approve",
+        action="append",
+        metavar="CANDIDATE_ID",
+        help="approve one derived candidate (repeatable)",
+    )
+    p_onboard.add_argument(
+        "--reject",
+        action="append",
+        metavar="CANDIDATE_ID",
+        help="reject one derived candidate (repeatable)",
+    )
+    p_onboard.add_argument(
+        "--auto-reject-unreviewed",
+        action="store_true",
+        help="complete review without importing any derived knowledge",
     )
     p_onboard.add_argument(
         "--status",
@@ -144,6 +161,43 @@ def handle(
         out = onboarding.run_export(state)
         if out.get("status") in {"exported", "nothing_new", "nothing_to_export"}:
             _advance(state, "preview", out)
+        printer(out, json_out)
+        return
+
+    if step == "preview":
+        out = onboarding.run_preview(state, confirm=bool(getattr(args, "confirm", False)))
+        if out.get("status") == "confirmed":
+            _advance(state, "import", out)
+        elif out.get("status") == "nothing_to_preview":
+            _advance(state, "import", out)
+        printer(out, json_out)
+        return
+
+    if step == "import":
+        out = onboarding.run_import(state)
+        if out.get("status") in {"imported", "nothing_to_import"}:
+            _advance(state, "review", out)
+        printer(out, json_out)
+        if out.get("status") == "partial_failure":
+            raise SystemExit(4)
+        return
+
+    if step == "review":
+        out = onboarding.run_review(
+            state,
+            approve=list(getattr(args, "approve", None) or []),
+            reject=list(getattr(args, "reject", None) or []),
+            auto_reject_unreviewed=bool(getattr(args, "auto_reject_unreviewed", False)),
+        )
+        if out.get("status") == "reviewed":
+            _advance(state, "connect", out)
+        printer(out, json_out)
+        return
+
+    if step == "connect":
+        out = onboarding.run_connect(state)
+        if out.get("status") in {"connected", "already_connected", "no_agent_detected", "config_missing"}:
+            _advance(state, "done", out)
         printer(out, json_out)
         return
 
