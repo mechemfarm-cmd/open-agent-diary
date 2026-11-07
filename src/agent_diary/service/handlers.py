@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from agent_diary.analytics.ranking import rank as rank_beliefs, render_selection
 from agent_diary.analytics.semantic_situations import ALLOWED_PURPOSES, compile_situation, render_situation_view
 from agent_diary.index.belief_repository import load_candidates
 from agent_diary.index.belief_usage import credit_from_new_evidence, record_acted_on, record_surface
+from agent_diary.index.retrieval_metrics import elapsed_ms, record_event
 from agent_diary.config import Paths
 from agent_diary.index.repository import (
     get_entry_row,
@@ -51,6 +53,14 @@ from agent_diary.storage.imports import (
     save_import_ledger,
     write_import_batch_manifest,
 )
+
+
+def _record_retrieval_best_effort(paths: Paths, **kwargs: Any) -> None:
+    """Telemetry must never change retrieval behavior or availability."""
+    try:
+        record_event(paths.sqlite_path, **kwargs)
+    except Exception:
+        pass
 
 
 def _require_fields(payload: dict[str, Any], fields: list[str]) -> None:
@@ -1431,6 +1441,7 @@ def attach_artifact(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
+    started = time.monotonic()
     query = str(payload.get("query", "")).strip()
     limit = int(payload.get("limit", 20))
     filters = _resolve_provenance_filters(payload)
@@ -1557,7 +1568,7 @@ def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
         {k: v for k, v in item.items() if k != "_score"}
         for item in ranked_matches[:limit]
     ]
-    return {
+    result = {
         "query": query,
         "limit": limit,
         "filters": {
@@ -1575,6 +1586,17 @@ def search_memory(paths: Paths, payload: dict[str, Any]) -> dict[str, Any]:
         },
         "note": "Search merges derived compressed-memory hits with authoritative raw-entry matches and ranks them per entry.",
     }
+    _record_retrieval_best_effort(
+        paths,
+        route="search_memory",
+        query=query,
+        candidate_count=len(compressed_matches) + len(raw_hits),
+        result_count=len(matches),
+        returned_chars=len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))),
+        latency_ms=elapsed_ms(started),
+        metadata={"limit": limit, "truthful_only": bool(filters.get("truthful_only", False))},
+    )
+    return result
 
 
 # ── belief recall (evidential belief layer) ─────────────────────────────────
@@ -1612,6 +1634,7 @@ def recall_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[
     Facts with no stored belief score zero and therefore never appear. That is
     the intended default for something nothing has evaluated yet.
     """
+    started = time.monotonic()
     payload = payload or {}
     limit = int(payload.get("limit", 8))
     char_budget = int(payload.get("char_budget", 900))
@@ -1632,7 +1655,7 @@ def recall_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[
     by_id = {cand.fact_id: (cand, score) for cand, score in selected}
     surfaced = record_surface(paths.sqlite_path, shown_ids) if shown_ids else 0
 
-    return {
+    result = {
         "block": block,
         "considered": len(candidates),
         "selected": len(selected),
@@ -1655,6 +1678,17 @@ def recall_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[
             "surfacing; those cut by the character budget have not."
         ),
     }
+    _record_retrieval_best_effort(
+        paths,
+        route="recall_beliefs",
+        query=str(payload.get("query", "")),
+        candidate_count=len(candidates),
+        result_count=len(shown_ids),
+        returned_chars=len(block),
+        latency_ms=elapsed_ms(started),
+        metadata={"limit": limit, "char_budget": char_budget, "selected": len(selected)},
+    )
+    return result
 
 
 def credit_beliefs(paths: Paths, payload: dict[str, Any] | None = None) -> dict[str, Any]:

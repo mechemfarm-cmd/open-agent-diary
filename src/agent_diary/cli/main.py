@@ -17,8 +17,31 @@ from agent_diary.cli.openclaw_work_trace_import import (
     import_openclaw_work_trace,
 )
 from agent_diary.cli.transcript_adapter import SUPPORTED_ADAPTER_FORMATS, adapt_session_export, build_openclaw_telegram_direct_transcript
-from agent_diary.config import default_paths
+from agent_diary.cli.onboarding import (
+    add_onboarding_parsers,
+    handle as handle_onboarding_command,
+    handles as handles_onboarding,
+)
+from agent_diary.onboarding_state import OnboardingError
+from agent_diary.config import default_paths, resolve_data_root
 from agent_diary.index.sqlite_index import bootstrap_sqlite
+from agent_diary.index.retrieval_metrics import summarize_events
+from agent_diary.orientation import create_run, list_runs, load_run, set_consent
+from agent_diary.orientation_inventory import inventory_metadata, inventory_source
+from agent_diary.orientation_preview import preview_approved_source
+from agent_diary.orientation_import import import_approved_history
+from agent_diary.orientation_candidates import generate_candidates, list_candidates, set_candidate_status
+from agent_diary.orientation_knowledge import list_knowledge, search_knowledge, set_knowledge_status
+from agent_diary.orientation_review import show_candidate
+from agent_diary.orientation_context import build_context_pack
+from agent_diary.orientation_evaluation import evaluate_context_pack
+from agent_diary.orientation_answer_evaluation import build_answer_eval_prompts
+from agent_diary.orientation_answer_scoring import score_paired_answers
+from agent_diary.orientation_eval_suite import (
+    load_case_set,
+    run_paired_evaluation,
+    validate_case_set,
+)
 from agent_diary.service.doctor import run_doctor
 from agent_diary.service.handlers import (
     append_entry,
@@ -69,6 +92,29 @@ def _print(output: dict, as_json: bool) -> None:
         print(json.dumps(output, indent=2))
     else:
         print(output)
+
+
+def _load_json_argument(value: str) -> Any:
+    """Load inline JSON or a JSON file without treating long JSON as a path."""
+    text = str(value)
+    stripped = text.lstrip()
+    if stripped.startswith(("{", "[")):
+        return json.loads(text)
+    try:
+        path = Path(text)
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    return json.loads(text)
+
+
+def _load_cases_argument(value: str) -> list[Any]:
+    """Accept either a bare case array or a validated case-set object."""
+    payload = _load_json_argument(value)
+    if isinstance(payload, dict):
+        return list(validate_case_set(payload)["cases"])
+    return payload
 
 
 def _format_doctor_report(report: dict, paths: Any) -> str:
@@ -178,6 +224,117 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--source-session-id", help="optional provenance filter")
     p_search.add_argument("--import-id", help="optional provenance filter")
     p_search.add_argument("--truthful-only", action="store_true", help="include only truthful imported entries")
+
+    p_retrieval_report = sub.add_parser(
+        "retrieval-report",
+        help="show read-only retrieval size, latency, and cost measurements",
+    )
+    p_retrieval_report.add_argument("--since", help="optional ISO-8601 lower bound for event time")
+
+    p_orientation_create = sub.add_parser(
+        "orientation-create",
+        help="create a consent-pending orientation run from a JSON source list",
+    )
+    p_orientation_create.add_argument("--sources", required=True, help="JSON array of source descriptors")
+    p_orientation_create.add_argument("--run-id")
+
+    p_orientation_list = sub.add_parser("orientation-list", help="list orientation runs")
+    p_orientation_list.add_argument("--limit", type=int, default=20)
+
+    p_orientation_show = sub.add_parser("orientation-show", help="show one orientation run")
+    p_orientation_show.add_argument("--run-id", required=True)
+
+    p_orientation_consent = sub.add_parser("orientation-consent", help="approve, reject, or revoke one source")
+    p_orientation_consent.add_argument("--run-id", required=True)
+    p_orientation_consent.add_argument("--source-id", required=True)
+    p_orientation_consent.add_argument("--decision", choices=["approved", "rejected", "revoked"], required=True)
+    p_orientation_consent.add_argument("--reason")
+
+    p_orientation_inventory = sub.add_parser(
+        "orientation-inventory",
+        help="preview directory metadata without reading file contents",
+    )
+    p_orientation_inventory.add_argument("--root", required=True)
+    p_orientation_inventory.add_argument("--max-entries", type=int, default=10000)
+    p_orientation_inventory.add_argument("--run-id", help="persist inventory into an orientation run")
+    p_orientation_inventory.add_argument("--source-id", help="source id within --run-id")
+
+    p_orientation_preview = sub.add_parser(
+        "orientation-preview",
+        help="preview an approved Hermes-history source without importing it",
+    )
+    p_orientation_preview.add_argument("--run-id", required=True)
+    p_orientation_preview.add_argument("--source-id", required=True)
+    p_orientation_preview.add_argument("--format", dest="format_name", default="generic-message-jsonl")
+    p_orientation_preview.add_argument("--max-messages", type=int, default=20)
+    p_orientation_preview.add_argument("--sample-chars", type=int, default=240)
+
+    p_orientation_import = sub.add_parser(
+        "orientation-import",
+        help="import an approved Hermes-history source into raw Diary entries",
+    )
+    p_orientation_import.add_argument("--run-id", required=True)
+    p_orientation_import.add_argument("--source-id", required=True)
+    p_orientation_import.add_argument("--format", dest="format_name", default="generic-message-jsonl")
+    p_orientation_import.add_argument("--import-id")
+    p_orientation_import.add_argument("--dry-run", action="store_true")
+
+    p_candidates_generate = sub.add_parser("orientation-candidates-generate", help="generate pending orientation candidates")
+    p_candidates_generate.add_argument("--run-id", required=True)
+    p_candidates_generate.add_argument("--source-id", required=True)
+    p_candidates_generate.add_argument("--limit", type=int, default=10000)
+
+    p_candidates_list = sub.add_parser("orientation-candidates-list", help="list orientation candidates")
+    p_candidates_list.add_argument("--run-id", required=True)
+    p_candidates_list.add_argument("--status", choices=["pending", "approved", "rejected", "stale"])
+
+    p_candidate_review = sub.add_parser("orientation-candidate-review", help="approve, reject, or stale one candidate")
+    p_candidate_review.add_argument("--run-id", required=True)
+    p_candidate_review.add_argument("--candidate-id", required=True)
+    p_candidate_review.add_argument("--status", choices=["approved", "rejected", "stale"], required=True)
+
+    p_candidate_show = sub.add_parser("orientation-candidate-show", help="show candidate evidence and resulting knowledge")
+    p_candidate_show.add_argument("--run-id", required=True)
+    p_candidate_show.add_argument("--candidate-id", required=True)
+
+    p_knowledge_list = sub.add_parser("orientation-knowledge-list", help="list approved orientation knowledge")
+    p_knowledge_list.add_argument("--status", choices=["active", "revoked", "superseded"], default="active")
+
+    p_knowledge_search = sub.add_parser("orientation-knowledge-search", help="search approved orientation only")
+    p_knowledge_search.add_argument("query")
+    p_knowledge_search.add_argument("--limit", type=int, default=10)
+
+    p_knowledge_revoke = sub.add_parser("orientation-knowledge-revoke", help="revoke approved orientation knowledge")
+    p_knowledge_revoke.add_argument("--candidate-id", required=True)
+
+    p_context_pack = sub.add_parser("orientation-context-pack", help="build bounded read-only orientation context")
+    p_context_pack.add_argument("--max-items", type=int, default=20)
+    p_context_pack.add_argument("--max-chars", type=int, default=8000)
+
+    p_context_eval = sub.add_parser("orientation-context-evaluate", help="evaluate context coverage against a no-context baseline")
+    p_context_eval.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
+    p_context_eval.add_argument("--max-items", type=int, default=20)
+    p_context_eval.add_argument("--max-chars", type=int, default=8000)
+
+    p_answer_eval = sub.add_parser("orientation-answer-eval-prompts", help="build paired prompts for answer-quality evaluation")
+    p_answer_eval.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
+    p_answer_eval.add_argument("--max-items", type=int, default=20)
+    p_answer_eval.add_argument("--max-chars", type=int, default=8000)
+
+    p_answer_score = sub.add_parser("orientation-answer-score", help="score paired orientation answers")
+    p_answer_score.add_argument("--cases", required=True, help="JSON array or path to a JSON case file")
+    p_answer_score.add_argument("--answers", required=True, help="JSON array or path to paired answers")
+
+    p_eval_validate = sub.add_parser("orientation-eval-case-set-validate", help="validate an orientation evaluation case set")
+    p_eval_validate.add_argument("--cases", required=True, help="path to a case-set JSON file")
+
+    p_eval_run = sub.add_parser("orientation-eval-run", help="run one paired orientation evaluation into a dated report")
+    p_eval_run.add_argument("--cases", required=True, help="path to a case-set JSON file")
+    p_eval_run.add_argument("--answers", required=True, help="JSON array or path to paired answers")
+    p_eval_run.add_argument("--out", help="write the report JSON to this path")
+    p_eval_run.add_argument("--max-items", type=int, default=20)
+    p_eval_run.add_argument("--max-chars", type=int, default=8000)
+    p_eval_run.add_argument("--min-cases", type=int, default=5)
 
     p_search_work_trace = sub.add_parser("search-work-trace")
     p_search_work_trace.add_argument("--query", required=True)
@@ -528,6 +685,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ger = sub.add_parser("graph-enqueue-recent")
     p_ger.add_argument("--limit", type=int, default=50)
 
+    add_onboarding_parsers(sub)
+
     return parser
 
 
@@ -616,7 +775,25 @@ def main() -> None:
             },
         )
 
-    paths = default_paths()
+    paths = default_paths(data_root=resolve_data_root())
+
+    if handles_onboarding(args.command):
+        # Dispatched before ensure_data_dirs: `init` decides where the data
+        # lives, so creating directories for a not-yet-chosen root would write
+        # to the wrong place.
+        try:
+            handle_onboarding_command(
+                args,
+                resolve_root=lambda: paths.data_root,
+                printer=_print,
+            )
+        except OnboardingError as exc:
+            if args.json:
+                print(json.dumps({"error": "onboarding_error", "detail": str(exc)}))
+            else:
+                print(f"error: {exc}")
+            raise SystemExit(1)
+        return
 
     if args.command == "doctor":
         # Dispatched BEFORE ensure_data_dirs/bootstrap_sqlite on purpose. This
@@ -710,6 +887,173 @@ def main() -> None:
         }
         out = search_memory(paths, payload)
         _print(out, args.json)
+        return
+
+    if args.command == "retrieval-report":
+        out = summarize_events(paths.sqlite_path, since=args.since)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-create":
+        out = create_run(paths, json.loads(args.sources), run_id=args.run_id)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-list":
+        _print({"runs": list_runs(paths, limit=args.limit)}, args.json)
+        return
+
+    if args.command == "orientation-show":
+        _print(load_run(paths, args.run_id), args.json)
+        return
+
+    if args.command == "orientation-consent":
+        out = set_consent(
+            paths,
+            args.run_id,
+            args.source_id,
+            args.decision,
+            reason=args.reason,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-inventory":
+        if bool(args.run_id) != bool(args.source_id):
+            raise ValueError("--run-id and --source-id must be supplied together")
+        if args.run_id:
+            out = inventory_source(paths, args.run_id, args.source_id, max_entries=args.max_entries)
+        else:
+            out = inventory_metadata(Path(args.root), max_entries=args.max_entries)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-preview":
+        out = preview_approved_source(
+            paths,
+            args.run_id,
+            args.source_id,
+            format_name=args.format_name,
+            max_messages=args.max_messages,
+            sample_chars=args.sample_chars,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-import":
+        out = import_approved_history(
+            paths,
+            run_id=args.run_id,
+            source_id=args.source_id,
+            format_name=args.format_name,
+            import_id=args.import_id,
+            dry_run=args.dry_run,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidates-generate":
+        out = generate_candidates(
+            paths,
+            run_id=args.run_id,
+            source_id=args.source_id,
+            limit=args.limit,
+        )
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidates-list":
+        _print({"candidates": list_candidates(paths, args.run_id, status=args.status)}, args.json)
+        return
+
+    if args.command == "orientation-candidate-review":
+        out = set_candidate_status(paths, args.run_id, args.candidate_id, args.status)
+        _print(out, args.json)
+        return
+
+    if args.command == "orientation-candidate-show":
+        _print(show_candidate(paths, args.run_id, args.candidate_id), args.json)
+        return
+
+    if args.command == "orientation-knowledge-list":
+        _print({"knowledge": list_knowledge(paths, status=args.status)}, args.json)
+        return
+
+    if args.command == "orientation-knowledge-search":
+        _print({"knowledge": search_knowledge(paths, args.query, limit=args.limit)}, args.json)
+        return
+
+    if args.command == "orientation-knowledge-revoke":
+        _print(set_knowledge_status(paths, args.candidate_id, "revoked"), args.json)
+        return
+
+    if args.command == "orientation-context-pack":
+        _print(build_context_pack(paths, max_items=args.max_items, max_chars=args.max_chars), args.json)
+        return
+
+    if args.command == "orientation-context-evaluate":
+        cases = _load_cases_argument(args.cases)
+        _print(
+            evaluate_context_pack(
+                paths,
+                cases,
+                max_items=args.max_items,
+                max_chars=args.max_chars,
+            ),
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-answer-eval-prompts":
+        _print(
+            build_answer_eval_prompts(
+                paths,
+                _load_cases_argument(args.cases),
+                max_items=args.max_items,
+                max_chars=args.max_chars,
+            ),
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-answer-score":
+        _print(
+            score_paired_answers(
+                _load_cases_argument(args.cases),
+                _load_json_argument(args.answers),
+            ),
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-eval-case-set-validate":
+        case_set = load_case_set(args.cases)
+        _print(
+            {
+                "valid": True,
+                "case_set_version": case_set["case_set_version"],
+                "data_class": case_set["data_class"],
+                "case_count": len(case_set["cases"]),
+                "case_ids": [case["case_id"] for case in case_set["cases"]],
+            },
+            args.json,
+        )
+        return
+
+    if args.command == "orientation-eval-run":
+        report = run_paired_evaluation(
+            paths,
+            load_case_set(args.cases),
+            _load_json_argument(args.answers),
+            max_items=args.max_items,
+            max_chars=args.max_chars,
+            min_cases=args.min_cases,
+        )
+        if args.out:
+            target = Path(args.out)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _print(report, args.json)
         return
 
     if args.command == "search-work-trace":
