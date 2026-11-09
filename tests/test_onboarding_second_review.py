@@ -249,3 +249,50 @@ def test_run_connect_without_an_agent_does_not_mark_connected(tmp_path, monkeypa
     out = onboarding.run_connect(state)
     assert out["needs_human"] is True
     assert state.agent_connected is False
+
+
+def test_no_source_onboarding_does_not_stick_at_review(tmp_path, monkeypatch):
+    """A fresh install with no history must still get past the review step.
+
+    Regression: run_review returns nothing_to_review when there is no
+    orientation run, and the CLI only advanced on "reviewed", so the flow
+    sat at review forever.
+    """
+    from argparse import Namespace
+    from agent_diary.cli import onboarding as cli_onboarding
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HERMES_HOME", str(home / ".hermes"))
+    monkeypatch.delenv("AGENTDIARY_DATA", raising=False)
+
+    root = tmp_path / "diary"
+    onboarding.run_init(root)
+
+    state = OnboardingState.load(root)
+    # walk to review the same way the CLI would
+    for step in ("discover", "consent", "export", "preview", "import"):
+        out = {
+            "discover": lambda: onboarding.run_discover(state),
+            "consent": lambda: onboarding.run_consent(state, {}),
+            "export": lambda: onboarding.run_export(state),
+            "preview": lambda: onboarding.run_preview(state),
+            "import": lambda: onboarding.run_import(state),
+        }[step]()
+        nxt = {"discover": "consent", "consent": "export", "export": "preview",
+               "preview": "import", "import": "review"}[step]
+        state.advance(nxt)
+        state.save()
+
+    assert state.step == "review"
+
+    printed = []
+    args = Namespace(command="onboard", json=True, step="review", status=False,
+                     answer=None, confirm=False, approve=None, reject=None,
+                     auto_reject_unreviewed=False)
+    cli_onboarding.handle(args, resolve_root=lambda: root, printer=lambda o, j: printed.append(o))
+
+    reloaded = OnboardingState.load(root)
+    assert reloaded.step == "connect", reloaded.step
+    assert printed and printed[0]["status"] == "nothing_to_review"

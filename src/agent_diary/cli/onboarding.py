@@ -189,7 +189,9 @@ def handle(
             reject=list(getattr(args, "reject", None) or []),
             auto_reject_unreviewed=bool(getattr(args, "auto_reject_unreviewed", False)),
         )
-        if out.get("status") == "reviewed":
+        # A run with no sources has nothing to review; that is a completion,
+        # not a reason to sit at this step forever.
+        if out.get("status") in {"reviewed", "nothing_to_review"}:
             _advance(state, "connect", out)
         printer(out, json_out)
         return
