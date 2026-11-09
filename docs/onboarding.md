@@ -149,7 +149,8 @@ Re-running a completed step is safe:
 - **`connect` says `connect_failed`** — the configuration could not be read or
   written safely; `detail` explains why.
 
-In every one of these cases `connect` writes nothing, returns `needs_human: true`,
-and leaves onboarding at `connect` so a person can decide.
 - **Export finds no new sessions** — `nothing_new` means everything already
   exported; the locator still points at the previous transcript.
+
+In every one of the `connect` cases above it writes nothing, returns
+`needs_human: true`, and leaves onboarding at `connect` so a person can decide.
