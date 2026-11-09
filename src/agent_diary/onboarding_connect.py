@@ -45,8 +45,26 @@ class ParsedEntry:
 
 
 def mcp_script_path() -> Path:
-    """The wrapper shipped at the repository root."""
-    return Path(__file__).resolve().parents[2] / "agent-diary-mcp.py"
+    """Locate the MCP wrapper.
+
+    It ships inside the package so a pip install works, but a development
+    checkout keeps it at the repository root. The package copy wins because it
+    is the one guaranteed to exist after installation.
+    """
+    override = os.environ.get("AGENTDIARY_MCP_SCRIPT")
+    if override:
+        return Path(override).expanduser()
+
+    package_dir = Path(__file__).resolve().parent
+    candidates = [
+        package_dir / "agent-diary-mcp.py",          # installed package
+        package_dir.parents[1] / "agent-diary-mcp.py",  # dev checkout (repo root)
+        Path.cwd() / "agent-diary-mcp.py",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
 
 
 def hermes_config_path() -> Path:
@@ -205,7 +223,23 @@ def connect_hermes(*, config_path: Path | str | None = None, dry_run: bool = Fal
     entry = desired_entry()
 
     if not mcp_script_path().is_file():
-        raise ConnectError(f"MCP wrapper not found at {mcp_script_path()}")
+        return {
+            "status": "mcp_wrapper_missing",
+            "detail": (
+                "The MCP wrapper script could not be found, so the agent cannot "
+                "be pointed at the diary automatically. Configure the MCP host by "
+                "hand using the entry below, or reinstall the package."
+            ),
+            "config_path": str(path),
+            "entry": entry,
+            "expected_wrapper": str(mcp_script_path()),
+            "http_equivalent": {
+                "url": f"http://127.0.0.1:{DEFAULT_PORT}",
+                "auth": "none (loopback)",
+            },
+            "changed": False,
+            "needs_human": True,
+        }
 
     if not path.is_file():
         return {

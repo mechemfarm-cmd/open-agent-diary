@@ -140,3 +140,27 @@ def test_flow_style_mcp_servers_is_not_edited(tmp_path):
     with pytest.raises(ConnectError):
         connect_hermes(config_path=config)
     assert config.read_text() == before
+
+
+def test_wrapper_resolves_to_a_real_file():
+    """The wrapper must be findable in an installed layout, not just a checkout."""
+    from agent_diary.onboarding_connect import mcp_script_path
+
+    path = mcp_script_path()
+    assert path.is_file(), path
+    assert path.name == "agent-diary-mcp.py"
+
+
+def test_missing_wrapper_is_reported_not_raised(tmp_path, monkeypatch):
+    """A pip install without the wrapper must produce a status, not a crash."""
+    import agent_diary.onboarding_connect as oc
+
+    config = tmp_path / "config.yaml"
+    config.write_text("model: x\n")
+    monkeypatch.setattr(oc, "mcp_script_path", lambda: tmp_path / "does-not-exist.py")
+
+    out = oc.connect_hermes(config_path=config)
+    assert out["status"] == "mcp_wrapper_missing"
+    assert out["needs_human"] is True
+    assert out["changed"] is False
+    assert config.read_text() == "model: x\n"

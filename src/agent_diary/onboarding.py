@@ -790,7 +790,21 @@ def run_connect(state: OnboardingState, *, dry_run: bool = False) -> dict:
             "next": "done",
         }
 
-    out = connect_hermes(config_path=config, dry_run=dry_run)
+    try:
+        out = connect_hermes(config_path=config, dry_run=dry_run)
+    except Exception as exc:  # a broken config must not crash onboarding
+        from agent_diary.onboarding_connect import ConnectError
+
+        if not isinstance(exc, ConnectError):
+            raise
+        return {
+            "status": "connect_failed",
+            "detail": str(exc),
+            "config_path": str(config),
+            "changed": False,
+            "needs_human": True,
+            "next": "connect",
+        }
     if out.get("status") in {"connected", "already_connected"}:
         state.agent_connected = True
         state.save()
