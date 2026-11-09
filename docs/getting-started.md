@@ -4,13 +4,16 @@ Open Agent Diary is a local Python server with a browser UI. It is early, workin
 
 ## Choose your data directory
 
-In v0.1 the data root is relative to the current working directory:
+Run `agent-diary init` once. It proposes a path, asks you to confirm it, scaffolds the diary there, and records the choice in `~/.config/agent-diary/config.json` so later commands find the same diary from anywhere.
 
-```text
-<directory where you run agent-diary>/data
+```bash
+agent-diary init                                  # interactive: confirm the proposed path
+agent-diary init --data-root /srv/diary --yes     # non-interactive
 ```
 
-Pick one directory deliberately and run the server, import commands, and doctor from there. Running the CLI from another directory creates or reads a different diary.
+Resolution order, highest first: an explicit `--data-root`, then `AGENTDIARY_DATA`, then the config file, then `<current working directory>/data`.
+
+`init` does not adopt an existing data root without asking, and it will not overwrite a configured root unless you pass `--force`.
 
 ## Install and start
 
@@ -19,8 +22,12 @@ cd /path/to/open-agent-diary
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
+agent-diary init
+agent-diary onboard
 agent-diary serve --host 127.0.0.1 --port 8041
 ```
+
+`onboard` is optional. It looks for history an agent already has on this machine, shows you exactly what it would read, and imports only what you approve.
 
 Open <http://127.0.0.1:8041>. Loopback is the safe default because v0.1 write routes are unauthenticated.
 

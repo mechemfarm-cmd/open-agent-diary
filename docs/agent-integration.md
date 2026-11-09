@@ -8,7 +8,7 @@ The project is early working software. A fresh installation starts empty; do not
 
 ## Start the server
 
-Run from the intended data directory. In v0.1, storage is `<current working directory>/data`.
+Resolve the diary before serving: `agent-diary init` writes the config file; otherwise set `AGENTDIARY_DATA` or pass `--data-root`. Resolution order, highest first: an explicit `--data-root`, then `AGENTDIARY_DATA`, then the config file, then `<current working directory>/data`.
 
 ```bash
 agent-diary serve --host 127.0.0.1 --port 8041

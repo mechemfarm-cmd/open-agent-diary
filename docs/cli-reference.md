@@ -1,6 +1,28 @@
 # CLI reference
 
-Run commands from the directory that owns your diary `data/` directory.
+Commands resolve the diary automatically once `agent-diary init` has been run. Resolution order, highest first: an explicit `--data-root`, then `AGENTDIARY_DATA`, then the config file, then `<current working directory>/data`.
+
+## Setup and onboarding
+
+```bash
+agent-diary init [--data-root PATH] [--yes] [--force]
+agent-diary onboard [--step STEP] [--status] [--json]
+```
+
+`init` chooses and scaffolds the data root and writes `~/.config/agent-diary/config.json`. Without `--data-root` it proposes a path and asks; `--yes` accepts the proposal, `--force` reconfigures an already-configured root.
+
+`onboard` runs one guided setup step at a time: `init`, `discover`, `consent`, `export`, `preview`, `import`, `review`, `connect`, `done`.
+
+| Flag | Meaning |
+|---|---|
+| `--status` | report the current step without changing anything |
+| `--step STEP` | run a specific step rather than the current one |
+| `--answer JSON` | per-source consent, e.g. `{"hermes":"metadata"}` or `{"hermes":"denied"}` |
+| `--confirm` | confirm a step that shows you something before advancing |
+| `--approve ID` / `--reject ID` | decide an individual derived-knowledge candidate |
+| `--auto-reject-unreviewed` | finish review without importing derived knowledge |
+
+Steps that need a human decision return `needs_human: true` and leave the state where it is. An agent must never choose a consent scope on the user's behalf.
 
 ## Server and diagnosis
 

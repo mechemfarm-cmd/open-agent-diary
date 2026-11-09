@@ -20,16 +20,25 @@ Wait if you need a hosted service, a finished one-click desktop application, or 
 
 ## Quick start
 
-Run commands from the directory that should own the diary data. In v0.1, runtime data lives in **`<current working directory>/data`**.
-
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
+```
+
+Create a diary, then walk through setup:
+
+```bash
+agent-diary init          # choose where the diary lives and scaffold it
+agent-diary onboard       # discover history, review consent, import, connect
 agent-diary serve --host 127.0.0.1 --port 8041
 ```
 
 Open <http://127.0.0.1:8041>.
+
+`init` records the data root in `~/.config/agent-diary/config.json`, so later commands find the same diary from any directory. Resolution order, highest first: an explicit `--data-root`, then `AGENTDIARY_DATA`, then the config file, then `<current working directory>/data`.
+
+An agent can drive the same setup non-interactively with `agent-diary --json onboard`, stopping only when a human decision is required. The full walkthrough is in [docs/onboarding.md](docs/onboarding.md).
 
 ### Try it with synthetic data
 
@@ -82,7 +91,8 @@ Read the [privacy model](docs/privacy-model.md) before exposing the service beyo
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md) — first run, demo, data root, and first-run expectations
+- [Onboarding](docs/onboarding.md) — the guided first run, and what an agent may and may not decide
+- [Getting started](docs/getting-started.md) — install, data root, demo, and first-run expectations
 - [Operating guide](docs/operating-guide.md) — daily use, health checks, backups, and troubleshooting
 - [Agent integration](docs/agent-integration.md) — generic agent contract and recall protocol
 - [Import pipelines](docs/import-pipelines.md) — canonical JSONL plus integration patterns

@@ -12,7 +12,7 @@ Open Agent Diary is local-first working software. Treat the data directory as va
 
 ## Health checks
 
-Run from the intended data root:
+These commands read whichever diary is resolved for your shell — see [Getting started](getting-started.md) for the order of precedence:
 
 ```bash
 agent-diary doctor
