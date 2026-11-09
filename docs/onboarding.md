@@ -24,7 +24,7 @@ init → discover → consent → export → preview → import → review → c
 | `preview` | Shows real samples and counts. Requires `--confirm`. | **Yes** — this is the last look before import. |
 | `import` | Writes entries. Idempotent. | No |
 | `review` | Approves derived facts into knowledge. | **Yes** — empty knowledge is a valid answer. |
-| `connect` | Writes your agent's MCP entry, with a backup. | No |
+| `connect` | Writes your agent's MCP entry, with a backup. | **Sometimes** — only when the runtime or configuration is missing or ambiguous (`config_missing`, `no_agent_detected`, `existing_entry_unrecognized`, `existing_entry_mismatch`, `mcp_wrapper_missing`, `connect_failed`). |
 
 `needs_human: true` is the only thing that should stop an agent. Everything else
 it can run itself.
@@ -121,8 +121,10 @@ Re-running a completed step is safe:
 
 - `export` takes only sessions not already marked, and a session deleted from
   the source does not break it.
-- `import` derives its import id from the run and source, so a repeat imports
-  nothing and says so.
+- `import` derives its import id from the run, the source, and a digest of the
+  transcript contents. Identical content reuses the same id, so a repeat imports
+  nothing and says so; a new export generation gets a new id, so sessions added
+  after the first import are still imported.
 - `connect` writes nothing if the entry already matches.
 
 ## If something goes wrong
@@ -135,5 +137,19 @@ Re-running a completed step is safe:
   `agent-diary` entry in a shape this step does not edit. Fix it by hand using
   the `entry` in the response; the step refuses rather than inserting a
   duplicate key.
+- **`connect` says `existing_entry_mismatch`** — there is a parseable entry, but
+  it points at a different diary or command. It is never overwritten; reconcile
+  it by hand.
+- **`connect` says `config_missing`** — no agent configuration was found at the
+  expected path. Create one, or add the MCP entry yourself.
+- **`connect` says `no_agent_detected`** — no supported agent runtime is present
+  on this machine, so there is nothing to configure.
+- **`connect` says `mcp_wrapper_missing`** — the wrapper script could not be
+  found. Reinstall the package, or point `AGENTDIARY_MCP_SCRIPT` at it.
+- **`connect` says `connect_failed`** — the configuration could not be read or
+  written safely; `detail` explains why.
+
+In every one of these cases `connect` writes nothing, returns `needs_human: true`,
+and leaves onboarding at `connect` so a person can decide.
 - **Export finds no new sessions** — `nothing_new` means everything already
   exported; the locator still points at the previous transcript.

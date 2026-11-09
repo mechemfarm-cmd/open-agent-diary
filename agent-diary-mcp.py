@@ -66,11 +66,11 @@ def search_memory(query: str, limit: int = 5) -> str:
     result = _diary_post("/search_memory", {"query": query, "limit": limit})
     if not result or not result.get("ok"):
         return json.dumps({"error": "Agent Diary search failed", "detail": result})
-    
+
     matches = result.get("result", {}).get("matches", [])
     if not matches:
         return json.dumps({"results": [], "message": "No matches found"})
-    
+
     output = []
     for m in matches:
         entry = {
@@ -82,7 +82,7 @@ def search_memory(query: str, limit: int = 5) -> str:
             "snippet": m.get("match_text", "")[:300],
         }
         output.append(entry)
-    
+
     return json.dumps({"results": output, "count": len(output)})
 
 
@@ -110,11 +110,11 @@ def search_work_trace(query: str, limit: int = 5) -> str:
     result = _diary_post("/search_work_trace", {"query": query, "limit": limit})
     if not result or not result.get("ok"):
         return json.dumps({"error": "Work trace search failed", "detail": result})
-    
+
     matches = result.get("result", {}).get("matches", [])
     if not matches:
         return json.dumps({"results": [], "message": "No work trace matches found"})
-    
+
     return json.dumps({"results": matches, "count": len(matches)})
 
 
@@ -132,11 +132,11 @@ def list_entries(limit: int = 10, source: str | None = None) -> str:
     result = _diary_post("/list_entries", body)
     if not result or not result.get("ok"):
         return json.dumps({"error": "List entries failed", "detail": result})
-    
+
     items = result.get("result", {}).get("items", result.get("result", {}).get("entries", []))
     if not items:
         return json.dumps({"results": [], "message": "No entries found"})
-    
+
     output = []
     for item in items[:limit]:
         output.append({
@@ -146,7 +146,7 @@ def list_entries(limit: int = 10, source: str | None = None) -> str:
             "author_role": item.get("author_role", ""),
             "title": item.get("title", ""),
         })
-    
+
     return json.dumps({"results": output, "count": len(output)})
 
 

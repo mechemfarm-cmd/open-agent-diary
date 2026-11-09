@@ -164,3 +164,16 @@ def test_missing_wrapper_is_reported_not_raised(tmp_path, monkeypatch):
     assert out["needs_human"] is True
     assert out["changed"] is False
     assert config.read_text() == "model: x\n"
+
+
+def test_shipped_wrapper_matches_the_repository_copy():
+    """Two copies of the wrapper must not drift.
+
+    The checkout copy and the packaged copy are the same script; a divergence
+    is how a fix reaches one install path and not the other.
+    """
+    from pathlib import Path
+
+    packaged = Path(__file__).resolve().parents[1] / "src" / "agent_diary" / "agent-diary-mcp.py"
+    root = Path(__file__).resolve().parents[1] / "agent-diary-mcp.py"
+    assert packaged.read_text() == root.read_text()
