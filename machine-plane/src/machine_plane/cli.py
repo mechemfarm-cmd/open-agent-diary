@@ -21,6 +21,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .chain import HashChain, build
+from .checkpoints import (
+    MemoryCheckpointSink,
+    TrustDomain,
+    assess,
+    publish,
+)
 from .claims import adapt_file
 from .correlation import (
     CorrelationStatus,
@@ -173,6 +180,39 @@ def _run_view(policy: PrivacyPolicy) -> int:
     return 0
 
 
+def _run_integrity(policy: PrivacyPolicy) -> int:
+    events = list(MockProducer(_correlate_events(), policy=policy).events())
+    chain = build(events, seal_at=WALL + 100)
+
+    print("the same intact chain, judged by where its checkpoint lives:")
+    for domain in (
+        TrustDomain.SAME_HOST,
+        TrustDomain.UNKNOWN,
+        TrustDomain.SEPARATE_HOST,
+    ):
+        sink = MemoryCheckpointSink(name=domain.value, trust_domain=domain)
+        publish(chain, sink, taken_at=WALL + 100)
+        result = assess(chain, sink)
+        print(f"  {domain.value:<16} evidence={result.evidence}")
+
+    print()
+    print("now delete the tail and check again:")
+    truncated = HashChain(chain.links[:2])
+    sink = MemoryCheckpointSink(
+        name="off-box", trust_domain=TrustDomain.SEPARATE_HOST
+    )
+    publish(chain, sink, taken_at=WALL + 100)
+    result = assess(truncated, sink)
+    print(f"  against an off-box checkpoint : status={result.status.value}")
+    print(f"                                  evidence={result.evidence}")
+
+    sink = MemoryCheckpointSink(name="nowhere")
+    result = assess(truncated, sink)
+    print(f"  with no checkpoint at all     : status={result.status.value}")
+    print(f"                                  evidence={result.evidence}")
+    return 0
+
+
 def _run_adapt(export: str | None) -> int:
     if not export:
         print("adapt needs --export PATH")
@@ -198,10 +238,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="machine-plane")
     parser.add_argument(
         "command",
-        choices=["demo", "correlate", "view", "adapt"],
+        choices=["demo", "correlate", "view", "adapt", "integrity"],
         help=(
             "demo: pipeline and importer; correlate: join the two accounts; "
-            "view: the ranked exception page; adapt: read an exported work trace"
+            "view: the ranked exception page; adapt: read an exported work "
+            "trace; integrity: what a checkpoint is worth where"
         ),
     )
     parser.add_argument(
@@ -233,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_view(policy)
     if args.command == "adapt":
         return _run_adapt(args.export)
+    if args.command == "integrity":
+        return _run_integrity(policy)
     return _run_demo(policy)
 
 

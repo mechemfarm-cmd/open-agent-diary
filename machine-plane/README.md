@@ -24,6 +24,8 @@ What exists:
 - correlation, joining machine records to agent claims by identity;
 - the adapter from an exported work trace to agent claims;
 - the hash chain and checkpoint verification;
+- off-box checkpoint publication, with the trust domain made explicit;
+- the kill switch's authority, state and fail-direction model;
 - the view: ranked exceptions, each in one plain sentence.
 
 What does not exist:
@@ -31,9 +33,8 @@ What does not exist:
 - any platform producer (Linux, Windows or macOS);
 - an exporter — something has to write the work trace out, and that lives
   outside this package by design;
-- checkpoint storage off-box, without which the chain proves less than it
-  appears to;
-- the kill switch;
+- a privileged component to actually carry out a switch action — the model
+  decides what should happen, nothing here executes it;
 - any UI beyond the text page.
 
 This package is deliberately the part that is the same everywhere. The sensor is
@@ -55,6 +56,8 @@ machine-plane/
     correlation.py   joining the agent's account to the machine's
     claims.py        adapting an exported work trace into claims
     chain.py         tamper evidence, and the limit of it
+    checkpoints.py   where a checkpoint is worth anything, and where it is not
+    killswitch.py    the switch as an architecture: authority, fail direction
     view.py          ranked exceptions, in plain language
     testing.py       test doubles so a producer can be built without a kernel
     cli.py           demos, so the system is observable without a sensor
@@ -93,6 +96,25 @@ adapt:
 
 ```bash
 PYTHONPATH=src python3 -m machine_plane.cli adapt --export /path/to/work-trace.jsonl
+```
+
+The fifth shows what a checkpoint is worth depending on where it lives:
+
+```bash
+PYTHONPATH=src python3 -m machine_plane.cli integrity
+```
+
+```
+the same intact chain, judged by where its checkpoint lives:
+  same_host        evidence=False
+  unknown          evidence=False
+  separate_host    evidence=True
+
+now delete the tail and check again:
+  against an off-box checkpoint : status=truncated
+                                  evidence=False
+  with no checkpoint at all     : status=ok
+                                  evidence=False
 ```
 
 ## Decisions worth knowing
@@ -175,6 +197,26 @@ driver, knows where no Diary lives, and cannot be pointed at one. Whoever runs
 the export decides what leaves their machine. A test reads the module's source
 and asserts the forbidden names never appear, so the boundary survives future
 edits.
+
+**A checkpoint's worth depends entirely on where it lives.** Same host as the
+chain, and it proves nothing — whoever can rewrite the chain can rewrite the
+checkpoint beside it. So the default trust domain is `UNKNOWN`, never
+`SEPARATE_HOST`: assuming the good case would make every downstream claim wrong
+by default, invisibly. `assess()` exposes an `evidence` flag that is true only
+when the chain verifies *and* the checkpoint is genuinely off-box, which is the
+code refusing to let the document use words the evidence cannot support.
+
+**The kill switch has no default fail direction.** Whether an unreachable
+controller leaves the agent running or stops it is a decision someone has to make
+out loud — both are defensible, and the wrong one is discovered at the worst
+moment. So the constructor refuses to guess. Only registered controllers may
+request an action, an agent asking for its own pause is refused rather than
+logged, and a switch is not `proven` until someone has observed it from outside.
+"Stopped", said by the thing that was meant to stop, is not evidence that it did.
+
+**The switch model executes nothing.** It decides authority, state and plans; the
+privileged component that issues real commands is separate work. A test asserts
+the module never grows a `subprocess` import.
 
 **Nothing is dropped silently, on either side.** A record the adapter cannot use
 is reported with its line number and a reason. Skipping it quietly would make an

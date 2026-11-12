@@ -28,6 +28,16 @@ from .claims import (
     adapt_jsonl,
     adapt_record,
 )
+from .checkpoints import (
+    CheckpointSink,
+    IntegrityAssessment,
+    JsonlCheckpointSink,
+    MemoryCheckpointSink,
+    PublishedCheckpoint,
+    TrustDomain,
+    assess,
+    publish,
+)
 from .correlation import (
     ACTION_ALIASES,
     INVESTIGABLE,
@@ -60,6 +70,15 @@ from .identity import (
     ProcessIdentity,
 )
 from .importer import Importer, ImportResult, MemoryStore, Store
+from .killswitch import (
+    FailDirection,
+    KillSwitch,
+    SwitchAction,
+    SwitchPlan,
+    SwitchState,
+    SwitchStep,
+    Unauthorised,
+)
 from .privacy import (
     DEFAULT_EXCLUDED_FRAGMENTS,
     FORBIDDEN_CONTENT_KEYS,
@@ -78,10 +97,25 @@ __all__ = [
     "AdaptResult",
     "AgentClaim",
     "CHAIN_VERSION",
+    "CheckpointSink",
+    "FailDirection",
+    "IntegrityAssessment",
+    "JsonlCheckpointSink",
+    "KillSwitch",
+    "MemoryCheckpointSink",
+    "PublishedCheckpoint",
+    "SwitchAction",
+    "SwitchPlan",
+    "SwitchState",
+    "SwitchStep",
     "TOOL_ACTIONS",
+    "TrustDomain",
+    "Unauthorised",
     "adapt_file",
     "adapt_jsonl",
     "adapt_record",
+    "assess",
+    "publish",
     "Capability",
     "CapabilityReport",
     "CapabilitySet",
