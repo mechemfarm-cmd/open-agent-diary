@@ -1,13 +1,15 @@
 # Agent Diary — Machine Plane
 
-**Status:** design sketch, revision 2. Nothing is built.
+**Status:** design sketch, revision 3. Nothing is built.
 
-**Revision 1 was reviewed** (Alice, branch `docs/machine-plane`, tip `64feaa1`).
-Its central finding is accepted: revision 1 described an observability pipeline
-while claiming a trustworthy audit product. This revision separates those two
-things, states the trust boundary explicitly, and replaces the guarantee,
-privacy, correlation, ingestion and loss models the review identified as
-blockers.
+**Revision 1** (tip `64feaa1`) was reviewed: it described an observability
+pipeline while claiming a trustworthy audit product. Revision 2 separated those
+two things, stated the trust boundary explicitly, and replaced the guarantee,
+privacy, correlation, ingestion and loss models.
+
+**Revision 3** adds §13, portability and producer architecture, following a
+second review. The correction it records: **a portable schema is not portable
+evidence quality.** Producers are per-platform; the core is not.
 
 **One-line idea:** Agent Diary records what an agent *said* it did. This adds an
 independent record of what the machine *observed happening*, and compares them —
@@ -303,7 +305,127 @@ Not a log viewer. Ranked investigable exceptions, showing:
 
 Nobody reads logs. The value is in what gets ranked to the top.
 
-## 13. Stage 0 — evaluate, do not build
+## 13. Portability and producer architecture
+
+**The format can be universal. The sensor cannot be, and the guarantees cannot be
+identical across platforms.** "Portable schema" must not be read as "portable
+evidence quality."
+
+### 13.1 The producer interface
+
+The core defines: the event envelope; capability negotiation; identity fields;
+confidence and reason codes; gap events; the ingestion protocol; schema
+versioning; and the privacy-policy interface.
+
+Each platform producer implements:
+
+```
+collect -> normalize -> redact -> annotate capabilities -> emit
+```
+
+The core does not know whether an event came from eBPF, Sysmon, Endpoint
+Security, auditd, Falco, Tetragon, or a future sensor.
+
+**Privacy filtering happens in the producer, before normalization and before the
+spool.** If a platform event carries command lines, they are discarded before
+anything is written. A filter applied later cannot deliver a metadata-only
+guarantee.
+
+### 13.2 Implementation order
+
+- **Linux first.** eBPF, with auditd as a fallback. It is the available and
+  testable environment, and it keeps the first release clear of Apple's
+  entitlement process.
+- **Windows later.** Consume selected **Sysmon** events rather than shipping a
+  custom kernel driver. Sysmon is a downloadable Sysinternals service and driver,
+  not a component enabled by default in Windows. It provides structured process,
+  network, file and image-load events — but it also exposes **full command lines
+  and detailed paths**, so the producer applies the Agent Diary privacy policy
+  before ingestion and declares explicitly which Sysmon fields it accepts,
+  redacts, hashes or rejects. The same policy applies to live events, exports and
+  test fixtures.
+- **macOS later.** Endpoint Security is the correct interface — technically
+  viable, but **distribution-constrained**: public distribution depends on Apple
+  entitlement and signing approval. Treat it as a later, separately validated
+  producer. Unified logging is a lower-fidelity fallback.
+
+### 13.3 Capabilities are reported individually, with intervals
+
+A single minimum kernel version must not imply uniform capability. Linux support
+depends on kernel configuration, BTF, cgroups, lockdown mode, available BPF
+features, and the sensor chosen.
+
+Report each capability separately: `bpf_available`, `btf_available`,
+`cgroup_tracking`, `process_exec`, `file_activity`, `network_connect`,
+`kernel_lockdown_mode`.
+
+A capability report carries **when** it was unavailable, not merely that it was:
+
+```
+capability: btf
+available: false
+from: <timestamp>
+to: <timestamp>
+reason: missing_kernel_btf
+```
+
+Otherwise a missing event is indistinguishable from "nothing happened" (§7).
+
+### 13.4 Neutral identity, structured isolation
+
+The core schema carries neutral identity, with producer-specific identity
+preserved alongside it:
+
+```
+host_id
+boot_id
+process_instance_id
+parent_process_instance_id
+process_start_time
+isolation_domain
+```
+
+`isolation_domain` is **structured, not a string**:
+
+```
+{ "type": "cgroup", "id": "...", "scope": "systemd-run scope name",
+  "platform": "linux" }
+```
+
+Domain types: `cgroup`, `job_object`, `endpoint_security_process_group`,
+`container`, `vm`, `none`, `unknown`.
+
+Domains can nest — a process may sit inside `VM -> container -> cgroup ->
+process`, or `host -> job object -> process` — so the schema supports a domain
+chain or parent domain, not one flat identifier.
+
+Platform-specific evidence belongs under a separate `platform_details` field. Do
+not reduce to the lowest common denominator: that produces a portable format
+which loses the evidence needed to explain what happened.
+
+### 13.5 Event semantics differ, and must not be flattened
+
+**File events** do not mean the same thing across platforms: open versus actual
+read; open-for-write versus modified contents; rename; unlink; creation; hard
+links; symlinks; Windows reparse points; case-insensitive paths; macOS bundles
+and extended attributes. The model distinguishes at least `open`, `read_attempt`,
+`write_attempt`, `create`, `rename`, `unlink`, `metadata_change` — never a single
+`file_changed`.
+
+**Network events** are not equivalent either. Process identity, source and
+destination address, hostname, port, protocol, DNS relationship and connection
+lifecycle are exposed in different combinations. Capability flags accompany every
+network event, and the system does not pretend the evidence is equivalent.
+
+### 13.6 Every event carries its own provenance
+
+At minimum: `producer`, `producer_version`, `platform`, `capabilities_at_capture`,
+`privacy_mode`, `coverage_state`, `confidence`.
+
+Without these, downstream code will treat a partial Windows or macOS event as
+equivalent to a richer Linux one.
+
+## 14. Stage 0 — evaluate, do not build
 
 Run against real activity on Art (the agent's own process tree). Ten questions:
 
@@ -326,7 +448,7 @@ runs.
 
 **Nothing is built until those results exist.**
 
-## 14. Non-goals
+## 15. Non-goals
 
 - Not a general EDR or intrusion-detection system.
 - Not cross-platform in v0: Linux only. macOS (Endpoint Security) and Windows
@@ -335,9 +457,9 @@ runs.
 - Not a compliance product.
 - Not a replacement for AgentSight, Tetragon or Falco — a consumer of one.
 
-## 15. Staged plan
+## 16. Staged plan
 
-- **Stage 0 — evaluate** (§13). No code.
+- **Stage 0 — evaluate** (§14). No code.
 - **Stage 1 — ingestion boundary and identity** (§5, §8). No UI, no chain.
 - **Stage 2 — privilege separation, proven.** The agent cannot reach the
   recorder, demonstrated rather than asserted.
@@ -346,7 +468,7 @@ runs.
 
 Approval for Stage 0 does not imply approval for Stage 1.
 
-## 16. Open questions
+## 17. Open questions
 
 - Retention horizon for machine events, which accumulate far faster than entries.
 - Does a confirmed mismatch ever raise an alarm, or only rank higher in the view?
