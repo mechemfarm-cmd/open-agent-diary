@@ -23,11 +23,12 @@ from typing import Any, Protocol
 from .capabilities import CapabilitySet
 from .events import (
     PATH_EVENT_TYPES,
+    EventType,
     MachineEvent,
     PrivacyMode,
 )
 from .identity import IdentityConfidence
-from .privacy import PrivacyPolicy
+from .privacy import PrivacyPolicy, coarsen_destination
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,8 @@ class Producer(ABC):
         target = event.target
         if event.type in PATH_EVENT_TYPES and target is not None:
             target = self._policy.redact_path(target).value
-        elif event.type.value == "connect" and target is not None:
-            target = _coarsen_destination(target)
+        elif event.type is EventType.CONNECT and target is not None:
+            target = coarsen_destination(target)
 
         details, _removed = self._policy.sanitize_details(dict(event.platform_details))
 
@@ -127,17 +128,3 @@ class Producer(ABC):
             event = self.annotate(self.redact(self.normalize(raw)))
             event.validate_for_storage()
             yield event
-
-
-def _coarsen_destination(target: str) -> str:
-    """Reduce a network destination to host and port.
-
-    Paths and query strings in a URL routinely carry tokens and identifiers.
-    The metadata-only guarantee has to survive a producer that hands us a full
-    URL, so we cut it down rather than trusting the sensor.
-    """
-    if "://" in target:
-        scheme, _, remainder = target.partition("://")
-        authority = remainder.split("/", 1)[0]
-        return f"{scheme}://{authority}"
-    return target.split("/", 1)[0]

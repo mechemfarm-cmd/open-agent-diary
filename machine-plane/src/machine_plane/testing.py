@@ -9,6 +9,7 @@ Stage 0 eventually picks.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from .capabilities import Capability, CapabilityReport, CapabilitySet
 from .events import CoverageState, EventType, MachineEvent, PrivacyMode
@@ -19,6 +20,9 @@ from .identity import (
     ProcessIdentity,
 )
 from .producer import Producer, RawEvent
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .correlation import AgentClaim, RunRegistration
 
 
 def make_identity(
@@ -65,6 +69,50 @@ def make_capabilities(*, available: bool = True) -> CapabilitySet:
     return CapabilitySet(reports)
 
 
+def make_registration(
+    capture_id: str = "run-1",
+    *,
+    started_at: float = 0.0,
+    ended_at: float | None = None,
+    scope: str | None = "agent-run",
+    boot_id: str | None = "boot-1",
+    process_instance_ids: tuple[str, ...] = (),
+) -> "RunRegistration":
+    """A supervisor-issued run, matching the identity ``make_identity`` builds."""
+    from .correlation import RunRegistration
+
+    return RunRegistration(
+        capture_id=capture_id,
+        started_at=started_at,
+        ended_at=ended_at,
+        scope=scope,
+        boot_id=boot_id,
+        process_instance_ids=process_instance_ids,
+    )
+
+
+def make_claim(
+    action: str = "write",
+    *,
+    capture_id: str = "run-1",
+    target: str | None = None,
+    wall_time: float = 1_700_000_000.0,
+    monotonic_time: float | None = 10.0,
+    tool: str | None = "write_file",
+) -> "AgentClaim":
+    """One action the agent declares it took."""
+    from .correlation import AgentClaim
+
+    return AgentClaim(
+        capture_id=capture_id,
+        action=action,
+        wall_time=wall_time,
+        target=target,
+        monotonic_time=monotonic_time,
+        tool=tool,
+    )
+
+
 class MockProducer(Producer):
     """A producer that replays a fixed list of raw events.
 
@@ -103,6 +151,31 @@ class MockProducer(Producer):
             result=raw.result,
             platform_details=dict(raw.details or {}),
         )
+
+
+def gap_event(
+    event_type: EventType = EventType.BUFFER_OVERFLOW,
+    *,
+    wall_time: float = 1_700_000_000.0,
+    monotonic_time: float = 10.0,
+    details: dict | None = None,
+    result: str | None = None,
+) -> RawEvent:
+    """A coverage or lifecycle event.
+
+    Separate from ``action_event`` because a gap event has no process identity
+    by definition — it reports that something could not be observed, not that
+    something was.
+    """
+    return RawEvent(
+        type=event_type,
+        monotonic_time=monotonic_time,
+        wall_time=wall_time,
+        identity=None,
+        target=None,
+        result=result,
+        details=details or {},
+    )
 
 
 def action_event(

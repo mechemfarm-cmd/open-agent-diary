@@ -20,12 +20,14 @@ What exists:
 - capability and coverage reporting;
 - producer-side redaction;
 - the producer pipeline;
-- the protected spool and the unprivileged importer.
+- the protected spool and the unprivileged importer;
+- correlation, joining machine records to agent claims by identity.
 
 What does not exist:
 
 - any platform producer (Linux, Windows or macOS);
-- correlation against agent work traces;
+- an adapter from Agent Diary work traces to agent claims — the shape is
+  defined (`AgentClaim`), but nothing reads the Diary yet;
 - the hash chain, the view, and the kill switch.
 
 This package is deliberately the part that is the same everywhere. The sensor is
@@ -44,8 +46,9 @@ machine-plane/
     producer.py      the pipeline: collect -> normalize -> redact -> annotate -> emit
     spool.py         the protected, append-only ingestion boundary
     importer.py      the unprivileged importer
+    correlation.py   joining the agent's account to the machine's
     testing.py       test doubles so a producer can be built without a kernel
-    cli.py           a demo, so the pipeline is observable without a sensor
+    cli.py           demos, so the system is observable without a sensor
   tests/
 ```
 
@@ -56,11 +59,18 @@ cd machine-plane
 PYTHONPATH=src python3 -m unittest discover -s tests -t tests
 ```
 
-A demo, which runs a mock producer through the whole pipeline and prints what
-survived redaction:
+Two demos. The first runs a mock producer through the whole pipeline and prints
+what survived redaction:
 
 ```bash
 PYTHONPATH=src python3 -m machine_plane.cli demo --allowed-root /home/x/work
+```
+
+The second joins a machine record to a set of agent claims and prints the result
+by category:
+
+```bash
+PYTHONPATH=src python3 -m machine_plane.cli correlate --allowed-root /home/x/work
 ```
 
 ## Decisions worth knowing
@@ -100,6 +110,30 @@ read as support.
 **File and network semantics are kept distinct.** Opening a file for writing is
 not the same as modifying its contents, and `file_changed` would erase the
 difference that makes an effect worth investigating.
+
+**Correlation matches on identity, not on time.** A confirmed match requires the
+run identity, the action and the target to agree. Time only decides whether an
+effect landed inside the run's window or arrived late; it never promotes a match
+on its own.
+
+**Both accounts are redacted before they are compared.** The agent's declared
+target goes through the same policy as the observed one, so a basename is not
+matched against a full path.
+
+**A comparison that cannot be made is not a match.** When redaction drops both
+targets there is nothing to compare, and the event is reported ambiguous. But
+when only one side is dropped the answer is decidable — a surviving target
+proves the path was inside the allowed roots, a dropped one proves it was not —
+and treating that as undecidable made every unrelated event look ambiguous.
+
+**A disagreement is categorised, never counted.** Eight statuses, and the view
+ranks the investigable ones. A single "divergence" number tells you nothing
+about what kind of problem you have.
+
+**Claims are never swallowed to tidy the summary.** When an event's target was
+dropped, every claim of that action type is equally incomparable to it, so
+consuming them would let one un-attributable event absorb unrelated claims. Both
+sides are reported and the reason codes explain why.
 
 ## Dependencies
 

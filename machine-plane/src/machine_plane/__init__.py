@@ -10,6 +10,18 @@ Diary database. Platform sensors live in separate producer packages.
 """
 
 from .capabilities import Capability, CapabilityReport, CapabilitySet
+from .correlation import (
+    ACTION_ALIASES,
+    INVESTIGABLE,
+    AgentClaim,
+    CorrelatedRecord,
+    CorrelationReport,
+    CorrelationStatus,
+    CoverageMap,
+    RunRegistration,
+    RunRegistry,
+    correlate,
+)
 from .events import (
     ACTION_EVENT_TYPES,
     GAP_EVENT_TYPES,
@@ -41,10 +53,16 @@ from .producer import Producer, RawEvent, Sink
 from .spool import SPOOL_VERSION, Spool, SpoolEnvelope, SpoolError
 
 __all__ = [
+    "ACTION_ALIASES",
     "ACTION_EVENT_TYPES",
+    "AgentClaim",
     "Capability",
     "CapabilityReport",
     "CapabilitySet",
+    "CorrelatedRecord",
+    "CorrelationReport",
+    "CorrelationStatus",
+    "CoverageMap",
     "CoverageState",
     "DEFAULT_EXCLUDED_FRAGMENTS",
     "DomainType",
@@ -52,6 +70,7 @@ __all__ = [
     "EventType",
     "FORBIDDEN_CONTENT_KEYS",
     "GAP_EVENT_TYPES",
+    "INVESTIGABLE",
     "IdentityConfidence",
     "ImportResult",
     "Importer",
@@ -66,6 +85,8 @@ __all__ = [
     "Producer",
     "RawEvent",
     "RedactionResult",
+    "RunRegistration",
+    "RunRegistry",
     "SCHEMA_VERSION",
     "SPOOL_VERSION",
     "SchemaMismatch",
@@ -74,6 +95,7 @@ __all__ = [
     "SpoolEnvelope",
     "SpoolError",
     "Store",
+    "correlate",
     "event_kind",
 ]
 

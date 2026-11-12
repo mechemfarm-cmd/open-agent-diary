@@ -78,6 +78,24 @@ class PathDisplay(str, Enum):
     OMITTED = "omitted"
 
 
+def coarsen_destination(target: str) -> str:
+    """Reduce a network destination to host and port.
+
+    Paths and query strings in a URL routinely carry tokens and identifiers.
+    The metadata-only guarantee has to survive a producer that hands us a full
+    URL, so we cut it down rather than trusting the sensor.
+
+    Correlation applies this same function to an agent's declared target, so
+    the two accounts are compared after identical treatment rather than one
+    redacted against one raw.
+    """
+    if "://" in target:
+        scheme, _, remainder = target.partition("://")
+        authority = remainder.split("/", 1)[0]
+        return f"{scheme}://{authority}"
+    return target.split("/", 1)[0]
+
+
 @dataclass(frozen=True)
 class RedactionResult:
     value: str | None
