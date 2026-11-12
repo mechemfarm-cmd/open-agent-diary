@@ -22,9 +22,17 @@ reported the file-activity finding before it had been repeated.
 | tetragon / falco / sysdig / auditd | none | none |
 | Passwordless sudo | yes | yes |
 
-**Conclusion:** both hosts are viable for eBPF observation today, with zero
-installation. bpftrace already exists on both and the kernels have everything
-CO-RE needs. A sensor package would be an upgrade, not a prerequisite.
+**Conclusion:** both hosts are viable for a **privileged** eBPF probe today, with
+zero installation. bpftrace already exists on both and the kernels have
+everything CO-RE needs, so a sensor package would be an upgrade rather than a
+prerequisite.
+
+This is a statement about privileged feasibility, not about unprivileged attach.
+Both hosts report `unprivileged_bpf_disabled=2` and `perf_event_paranoid=4`,
+which is what those settings mean: a producer running as an ordinary process
+cannot attach, and the probes below were run with sudo. Whether the recorder runs
+privileged is therefore a Stage 0 question the probe does not answer, and the
+privilege separation the design depends on is only achievable if it does.
 
 ## Exec activity
 
@@ -90,6 +98,15 @@ Consequence: **counting syscalls is not counting actions.** A recorder logging
 every `execve` reports one command as a dozen effects, almost none of which
 happened. The filter must key on outcome — whether the exec actually took — not
 on the syscall appearing.
+
+That consequence is now carried in the core rather than left to each producer.
+`exec_outcome()` in `machine_plane.events` classifies an `EXEC` event as an
+attempt or a completed transition, and an `EXEC` with no `result` is an attempt
+by definition. A producer that emits syscall entries therefore produces attempts,
+which is correct and useful; one that wants to claim a process actually started
+has to record the result that proves it. Without this, a future producer could
+emit every syscall entry as `EXEC` and still satisfy the schema, and the finding
+above would quietly stop being enforced anywhere.
 
 ## Identity
 
