@@ -19,7 +19,6 @@ Usage:
 
 import argparse
 import json
-import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -300,6 +299,28 @@ def _paths_in_command(command: str) -> set[str]:
 
 # ── main ─────────────────────────────────────────────────────────────────
 
+def resolve_paths(data_dir: str):
+    """Resolve the Agent Diary path set from the ``--data-dir`` argument.
+
+    ``--data-dir`` is the data root itself — the same directory ``--diary-db``
+    points inside — but ``default_paths(root)`` reads its argument as a *project*
+    root whose data lives in ``<root>/data``. Passing ``Path(data_dir).parent``
+    therefore only resolved for the in-repo layout (``<checkout>/data``). With a
+    live root such as ``~/.local/share/agent-diary/<agent>`` it produced
+    ``<parent>/data/index/memory.db``, which does not exist, so every backfill
+    died with ``sqlite3.OperationalError: unable to open database file`` — while
+    the caller still exited 0 and reported success.
+
+    Passing the directory as ``data_root`` works for both layouts, and keeps the
+    explicit argument authoritative over ``AGENTDIARY_DATA`` (which the caller may
+    not export at all).
+    """
+    from agent_diary.config import default_paths
+
+    root = Path(data_dir).expanduser().resolve() if data_dir else None
+    return default_paths(data_root=root)
+
+
 def backfill_hermes_work_traces(
     diary_db: str,
     hermes_db: str,
@@ -308,15 +329,10 @@ def backfill_hermes_work_traces(
     session_filter: list[str] | None = None,
 ) -> dict:
     """Main entry point: find Hermes sessions, extract tool calls, import as work traces."""
-    from agent_diary.config import default_paths
     from agent_diary.index.repository import get_work_trace_row
     from agent_diary.service.handlers import append_work_trace_event
 
-    paths = default_paths(Path(data_dir).parent)
-    if os.environ.get("AGENTDIARY_DATA"):
-        # Honor the env var like the CLI/server do, so backfill writes land in
-        # the same data root as session imports (avoids split-brain).
-        paths = default_paths()
+    paths = resolve_paths(data_dir)
     results: list[dict] = []
     total_events = 0
     total_imported = 0
