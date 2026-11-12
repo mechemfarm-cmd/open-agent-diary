@@ -7,14 +7,19 @@ import unittest
 
 from machine_plane import killswitch as killswitch_module
 from machine_plane.killswitch import (
+    ControllerLease,
     FailDirection,
+    InvalidTransition,
     KillSwitch,
+    Observation,
+    ObservationSource,
     SwitchAction,
     SwitchState,
     Unauthorised,
 )
 
 CONTROLLERS = ("human:bill", "supervisor:emily")
+OBSERVERS = ("host:emily", "human:bill")
 
 
 def _switch(**overrides: object) -> KillSwitch:
@@ -22,6 +27,7 @@ def _switch(**overrides: object) -> KillSwitch:
         scope="agent-run-1",
         fail_direction=FailDirection.FAIL_CLOSED,
         authorised_controllers=CONTROLLERS,
+        observers=OBSERVERS,
     )
     options.update(overrides)
     return KillSwitch(**options)  # type: ignore[arg-type]
@@ -35,11 +41,42 @@ class FailDirectionTest(unittest.TestCase):
 
     def test_fail_closed_stops_the_agent_when_the_controller_is_lost(self) -> None:
         switch = _switch(fail_direction=FailDirection.FAIL_CLOSED)
-        self.assertEqual(switch.on_controller_loss(), SwitchState.STOPPED)
+        self.assertEqual(
+            switch.predicted_state_on_controller_loss(), SwitchState.STOPPED
+        )
 
     def test_fail_open_leaves_the_agent_running(self) -> None:
         switch = _switch(fail_direction=FailDirection.FAIL_OPEN)
-        self.assertEqual(switch.on_controller_loss(), SwitchState.RUNNING)
+        self.assertEqual(
+            switch.predicted_state_on_controller_loss(), SwitchState.RUNNING
+        )
+
+    def test_predicting_the_loss_state_does_not_change_the_model(self) -> None:
+        """Asking what *would* happen is not the same as it happening."""
+        switch = _switch(fail_direction=FailDirection.FAIL_CLOSED)
+        switch.predicted_state_on_controller_loss()
+        self.assertEqual(switch.state, SwitchState.RUNNING)
+        self.assertEqual(switch.losses, ())
+
+    def test_applying_the_loss_records_it_without_proving_it(self) -> None:
+        switch = _switch(fail_direction=FailDirection.FAIL_CLOSED)
+        resulting = switch.apply_controller_loss(at=5.0)
+        self.assertEqual(resulting, SwitchState.STOPPED)
+        self.assertEqual(switch.state, SwitchState.STOPPED)
+        self.assertEqual(len(switch.losses), 1)
+        self.assertFalse(switch.losses[0].verified)
+        self.assertFalse(switch.proven)
+
+    def test_controller_loss_needs_a_lease_to_have_meaning(self) -> None:
+        """Without a timeout, 'the controller is gone' is an opinion."""
+        switch = _switch()
+        with self.assertRaises(ValueError):
+            switch.controller_lost(last_seen=0.0, now=100.0)
+
+    def test_the_lease_decides_when_silence_is_loss(self) -> None:
+        switch = _switch(lease=ControllerLease(controller="human:bill", timeout=30.0))
+        self.assertFalse(switch.controller_lost(last_seen=100.0, now=120.0))
+        self.assertTrue(switch.controller_lost(last_seen=100.0, now=131.0))
 
 
 class AuthorityTest(unittest.TestCase):
@@ -95,35 +132,178 @@ class PlanningTest(unittest.TestCase):
         self.assertIn("cgroup freezer", text)
 
 
+_CURRENT = object()
+
+
+def _requested(**overrides: object) -> KillSwitch:
+    """A switch with one authorised request made, so a challenge exists."""
+    switch = _switch(**overrides)
+    switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+    return switch
+
+
+def _observation(
+    switch: KillSwitch,
+    state: SwitchState = SwitchState.STOPPED,
+    *,
+    observer: str = "host:emily",
+    source: ObservationSource = ObservationSource.EXTERNAL_VERIFIER,
+    at: float = 2.0,
+    challenge: object = _CURRENT,
+    scope: object = _CURRENT,
+) -> Observation:
+    """A report bound to the switch's latest request, unless told otherwise."""
+    return Observation(
+        observer=observer,
+        observed_state=state,
+        at=at,
+        source=source,
+        challenge=(
+            switch.records[-1].challenge if challenge is _CURRENT else challenge  # type: ignore[arg-type]
+        ),
+        scope=switch.scope if scope is _CURRENT else scope,  # type: ignore[arg-type]
+    )
+
+
 class VerificationTest(unittest.TestCase):
     def test_a_switch_is_not_proven_until_verified_from_outside(self) -> None:
-        switch = _switch()
-        switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        switch = _requested()
         self.assertFalse(switch.proven)
         self.assertIsNone(switch.verified_state)
 
     def test_an_external_observation_counts(self) -> None:
-        switch = _switch()
-        accepted = switch.record_verification(
-            observed_state=SwitchState.STOPPED, verified_externally=True, at=2.0
-        )
+        switch = _requested()
+        accepted = switch.record_observation(_observation(switch))
         self.assertTrue(accepted)
         self.assertTrue(switch.proven)
         self.assertEqual(switch.verified_state, SwitchState.STOPPED)
 
     def test_a_self_report_does_not_count(self) -> None:
         """'Stopped', said by the thing meant to stop, is not evidence."""
-        switch = _switch()
-        accepted = switch.record_verification(
-            observed_state=SwitchState.STOPPED, verified_externally=False, at=2.0
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, source=ObservationSource.SELF_REPORT)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+        self.assertEqual(len(switch.observations), 1)
+
+    def test_an_unregistered_observer_does_not_count(self) -> None:
+        """The registration list is the trust boundary, so it has to bite."""
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, observer="agent:hermes")
         )
         self.assertFalse(accepted)
         self.assertFalse(switch.proven)
 
+    def test_a_test_seam_is_not_proof(self) -> None:
+        """Calling the method from a test is not an external verification."""
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, source=ObservationSource.TEST_SEAM)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_an_unbound_observation_does_not_count(self) -> None:
+        """Without a challenge it is not tied to any action that was requested."""
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, challenge=None)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_an_observation_quoting_a_stale_challenge_does_not_count(self) -> None:
+        """A real observation of an earlier state is not proof of a later one."""
+        switch = _requested()
+        stale = switch.records[-1].challenge
+        switch.request(SwitchAction.RESUME, requested_by="human:bill", at=1.5)
+        accepted = switch.record_observation(
+            _observation(switch, challenge=stale, at=2.0)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_an_observation_of_another_scope_does_not_count(self) -> None:
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, scope="some-other-run")
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_an_observation_predating_its_request_does_not_count(self) -> None:
+        """Freshness: it cannot have observed a state that did not exist yet."""
+        switch = _requested()
+        accepted = switch.record_observation(_observation(switch, at=0.5))
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_each_request_issues_a_fresh_challenge(self) -> None:
+        switch = _switch()
+        first = switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        second = switch.request(SwitchAction.RESUME, requested_by="human:bill", at=2.0)
+        self.assertNotEqual(switch.records[0].challenge, switch.records[1].challenge)
+        self.assertEqual(first.action, SwitchAction.PAUSE)
+        self.assertEqual(second.action, SwitchAction.RESUME)
+
+    def test_a_boolean_can_no_longer_prove_the_switch(self) -> None:
+        """The old API took ``verified_externally=True`` from any caller.
+
+        An assertion is not an observation, so the parameter is gone: proof now
+        requires naming a registered observer, declaring where the report came
+        from, and quoting the challenge issued with the request it answers.
+        """
+        switch = _switch()
+        self.assertFalse(hasattr(switch, "record_verification"))
+        self.assertFalse(hasattr(switch, "on_controller_loss"))
+
+
+class TransitionTest(unittest.TestCase):
+    def test_stopping_from_running_is_refused(self) -> None:
+        """The table is a constraint, not a label."""
+        switch = _switch()
+        with self.assertRaises(InvalidTransition):
+            switch.request(SwitchAction.STOP, requested_by="human:bill", at=1.0)
+        self.assertEqual(switch.state, SwitchState.RUNNING)
+
+    def test_the_legal_sequence_is_accepted(self) -> None:
+        """The escalation ladder, in the only order it permits."""
+        switch = _switch()
+        switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        switch.request(SwitchAction.FREEZE, requested_by="human:bill", at=2.0)
+        switch.request(SwitchAction.ISOLATE, requested_by="human:bill", at=3.0)
+        switch.request(SwitchAction.STOP, requested_by="human:bill", at=4.0)
+        self.assertEqual(switch.state, SwitchState.STOPPED)
+
+    def test_skipping_a_rung_of_the_ladder_is_refused(self) -> None:
+        """Pause then stop is not a sequence a real switch can follow."""
+        switch = _switch()
+        switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        with self.assertRaises(InvalidTransition):
+            switch.request(SwitchAction.STOP, requested_by="human:bill", at=2.0)
+        self.assertEqual(switch.state, SwitchState.PAUSED)
+
+    def test_a_refused_transition_leaves_no_record(self) -> None:
+        switch = _switch()
+        before = len(switch.records)
+        with self.assertRaises(InvalidTransition):
+            switch.request(SwitchAction.STOP, requested_by="human:bill", at=1.0)
+        self.assertEqual(len(switch.records), before)
+
 
 class BoundaryTest(unittest.TestCase):
     def test_the_module_executes_nothing(self) -> None:
-        """It models the switch; the privileged component is separate work."""
+        """A regression tripwire, not a security control.
+
+        It reads source text, so it cannot prove the module will never execute
+        anything — an indirect call or a helper module would defeat it. What it
+        catches is the drift that matters: a future edit growing a real
+        ``subprocess`` or ``signal`` dependency in a module that is supposed to
+        only model the switch.
+        """
         source = inspect.getsource(killswitch_module)
         for forbidden in ("subprocess", "os.system", "popen", "signal."):
             with self.subTest(forbidden=forbidden):

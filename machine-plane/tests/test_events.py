@@ -6,13 +6,17 @@ import unittest
 from typing import Any
 
 from machine_plane.events import (
+    CoverageNote,
     CoverageState,
     EventKind,
     EventType,
+    ExecOutcome,
     MachineEvent,
     PrivacyMode,
     SchemaMismatch,
+    TargetState,
     event_kind,
+    exec_outcome,
 )
 from machine_plane.testing import make_identity
 
@@ -30,6 +34,12 @@ def _event(**overrides: Any) -> MachineEvent:
         result="ok",
     )
     payload.update(overrides)
+    # A target that was given is present; one that was not is explicitly absent,
+    # so the helper never produces the ambiguous case by accident.
+    payload["target_state"] = (
+        payload.get("target_state")
+        or (TargetState.PRESENT if payload.get("target") is not None else TargetState.ABSENT)
+    )
     return MachineEvent(**payload)
 
 
@@ -46,6 +56,32 @@ class EventKindTest(unittest.TestCase):
     def test_gap_event_needs_no_identity(self) -> None:
         event = _event(type=EventType.BUFFER_OVERFLOW, identity=None, target=None)
         self.assertIs(event.kind, EventKind.GAP)
+
+
+class ExecOutcomeTest(unittest.TestCase):
+    """An exec observation must say whether it is an attempt or a transition."""
+
+    def test_an_exec_with_no_result_is_an_attempt(self) -> None:
+        """A syscall-entry producer records attempts; that is what it saw."""
+        event = _event(type=EventType.EXEC, result=None)
+        self.assertIs(exec_outcome(event), ExecOutcome.ATTEMPTED)
+
+    def test_a_successful_result_is_a_completed_transition(self) -> None:
+        event = _event(type=EventType.EXEC, result="ok")
+        self.assertIs(exec_outcome(event), ExecOutcome.SUCCEEDED)
+
+    def test_a_failure_result_is_an_attempt(self) -> None:
+        """The Stage 0 case: 15 failed $PATH probes for one real command."""
+        event = _event(type=EventType.EXEC, result="enoent")
+        self.assertIs(exec_outcome(event), ExecOutcome.ATTEMPTED)
+
+    def test_an_unrecognised_result_is_not_a_completed_transition(self) -> None:
+        event = _event(type=EventType.EXEC, result="maybe")
+        self.assertIs(exec_outcome(event), ExecOutcome.ATTEMPTED)
+
+    def test_a_non_exec_event_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            exec_outcome(_event(type=EventType.WRITE_ATTEMPT))
 
 
 class SchemaVersionTest(unittest.TestCase):

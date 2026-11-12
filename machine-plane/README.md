@@ -173,15 +173,39 @@ on its own.
 target goes through the same policy as the observed one, so a basename is not
 matched against a full path.
 
-**A comparison that cannot be made is not a match.** When redaction drops both
-targets there is nothing to compare, and the event is reported ambiguous. But
-when only one side is dropped the answer is decidable — a surviving target
+**A comparison that cannot be made is not a match.** Redaction can drop a
+target, and then there is nothing to compare; the event is reported ambiguous.
+But when only one side is dropped the answer is decidable — a surviving target
 proves the path was inside the allowed roots, a dropped one proves it was not —
 and treating that as undecidable made every unrelated event look ambiguous.
+
+**The reason a target is missing decides what follows.** A bare `None` cannot
+carry that, because it means three different things: the action had no target, a
+target was removed by redaction, or nobody recorded one. Every record therefore
+carries a `TargetState`, and only an *explicit* absence on both sides counts as
+agreement. Reading `None` as agreement let a redacted private path confirm
+against a claim that never had a target — a confirmed match the system had not
+earned.
 
 **A disagreement is categorised, never counted.** Eight statuses, and the view
 ranks the investigable ones. A single "divergence" number tells you nothing
 about what kind of problem you have.
+
+**A gap says what it affects, and whether it has ended.** A gap with no scope
+claims *global* blindness, which is almost never true: losing file tracing does
+not make an exec observation unobservable, and treating it as though it did turns
+real evidence into "unmatched due to gap". So a gap carries the capabilities it
+affects and, where the producer knows it, when coverage resumed — a dropped
+buffer is a bounded loss, not permanent blindness. Before the first
+`recorder_started` nothing is known, and that interval counts as blind rather
+than as quiet.
+
+**Wall time is a limitation, so it is handled rather than assumed away.** An
+export carries wall times, not monotonic ones, so correlation compares on wall
+time — and a clock step can move a claim across a start, stop or gap boundary
+without anything else noticing. A `clock_jump` therefore marks the interval as
+unreliable, and claims inside it are reported as gaps. A silent wrong placement
+is worse than an honest "this comparison is not trustworthy".
 
 **Claims are never swallowed to tidy the summary.** When an event's target was
 dropped, every claim of that action type is equally incomparable to it, so
@@ -219,9 +243,26 @@ code refusing to let the document use words the evidence cannot support.
 controller leaves the agent running or stops it is a decision someone has to make
 out loud — both are defensible, and the wrong one is discovered at the worst
 moment. So the constructor refuses to guess. Only registered controllers may
-request an action, an agent asking for its own pause is refused rather than
-logged, and a switch is not `proven` until someone has observed it from outside.
-"Stopped", said by the thing that was meant to stop, is not evidence that it did.
+request an action, and an agent asking for its own pause is refused rather than
+logged.
+
+**The transition table is a constraint, not a label.** An action is refused
+unless the switch is actually in the state that action starts from, so the model
+cannot emit a sequence no real switch could follow. Asking what *would* happen if
+the controller went away is a named prediction
+(`predicted_state_on_controller_loss`); applying it is a separate call that
+records an unverified transition. Loss itself needs a lease with a timeout —
+without one, "the controller is gone" is an opinion.
+
+**A switch is not `proven` until a registered observer says so.** "Stopped", said
+by the thing that was meant to stop, is not evidence that it did. The package
+cannot verify that an observer is genuinely outside the scope — only the caller
+can, by deciding who goes in the registration list — so it does the part it can:
+an observation counts only from a registered observer that declares itself an
+external verification. A self-report, or a test calling the method directly, is
+recorded and does not count. The old API accepted a `verified_externally=True`
+boolean from any caller, which is an assertion rather than an observation, and it
+is gone.
 
 **The switch model executes nothing.** It decides authority, state and plans; the
 privileged component that issues real commands is separate work. A test asserts

@@ -179,7 +179,7 @@ def _coverage_note(coverage: CoverageMap | None) -> str:
     gaps = [
         interval
         for interval in coverage.blind_intervals
-        if interval[0] != float("-inf")
+        if interval.start != float("-inf")
     ]
 
     if not running:
@@ -187,13 +187,23 @@ def _coverage_note(coverage: CoverageMap | None) -> str:
     if not gaps:
         return "the recorder was running throughout the observed period"
 
-    open_ended = any(end is None for _, end in gaps)
+    # A gap that names what it affects is narrower than one that does not, and
+    # saying so keeps the line from reading as a blanket loss of coverage.
+    detail = (
+        " (some limited to specific capabilities)"
+        if any(interval.scoped for interval in gaps)
+        else ""
+    )
+
+    open_ended = any(interval.end is None for interval in gaps)
     if open_ended:
         return (
             f"the recorder was running, with {len(gaps)} reported coverage gap(s), "
-            "the last of which is still open"
+            f"the last of which is still open{detail}"
         )
-    return f"the recorder was running, with {len(gaps)} reported coverage gap(s)"
+    return (
+        f"the recorder was running, with {len(gaps)} reported coverage gap(s){detail}"
+    )
 
 
 def build_view(

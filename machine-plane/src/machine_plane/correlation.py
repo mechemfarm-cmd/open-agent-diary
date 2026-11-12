@@ -18,6 +18,18 @@ arrived late.
 target, and then the two accounts cannot be compared at all. That is reported as
 ambiguous, not as agreement. Silence is not evidence.
 
+**The reason a target is missing decides what follows.** ``None`` alone is
+ambiguous — it can mean the action had no target, that a target was redacted, or
+that nobody recorded one. The record carries a ``TargetState`` so the comparator
+can tell those apart instead of inferring from absence.
+
+**Time.** Comparison runs on wall time, which is the only clock the two sides
+share — an export carries wall times, not monotonic ones. That is a real
+limitation, so it is handled rather than assumed away: a ``clock_jump`` marks
+the interval as unreliable and claims inside it are reported as gaps, because a
+silent step can move a claim across a start, stop or gap boundary without
+anything else noticing.
+
 The statuses below are the taxonomy the design calls for: a disagreement is
 categorised, never reduced to a single "divergence" count.
 """
@@ -32,6 +44,7 @@ from .events import (
     EventKind,
     EventType,
     MachineEvent,
+    TargetState,
 )
 from .privacy import PrivacyPolicy, coarsen_destination
 
@@ -107,6 +120,9 @@ class AgentClaim:
     target: str | None = None
     monotonic_time: float | None = None
     tool: str | None = None
+    #: Why the target is what it is. Defaults to UNKNOWN, because a claim that
+    #: simply does not mention a target has not told us there wasn't one.
+    target_state: TargetState = TargetState.UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -159,8 +175,48 @@ class RunRegistry:
         return tuple(matches)
 
 
+@dataclass(frozen=True)
+class BlindInterval:
+    """A period the recorder could not see, and what it could not see.
+
+    Scope matters as much as time. Losing file tracing does not invalidate an
+    exec observation, so an unscoped gap would over-report blindness — and
+    over-reporting it turns real evidence into "unmatched due to gap".
+    """
+
+    start: float
+    end: float | None
+    affected: tuple[str, ...] = ()
+    reason: str = ""
+
+    @property
+    def scoped(self) -> bool:
+        """Whether the gap names what it affects, rather than claiming everything."""
+        return bool(self.affected)
+
+    def covers(self, timestamp: float) -> bool:
+        if timestamp < self.start:
+            return False
+        return self.end is None or timestamp < self.end
+
+    def applies_to(self, subject: str | None) -> bool:
+        if not self.affected:
+            return True
+        if subject is None:
+            return True
+        return subject in self.affected
+
+    def to_dict(self) -> dict:
+        return {
+            "start": self.start,
+            "end": self.end,
+            "affected": list(self.affected),
+            "reason": self.reason,
+        }
+
+
 class CoverageMap:
-    """When the recorder was running, and when it was blind.
+    """When the recorder was running, when it was blind, and to what.
 
     A missing event has to be distinguishable from nothing happening, and this
     is the structure that makes the distinction. Before the first
@@ -171,50 +227,90 @@ class CoverageMap:
     def __init__(
         self,
         running: Iterable[tuple[float, float | None]] = (),
-        blind: Iterable[tuple[float, float | None]] = (),
+        blind: Iterable[BlindInterval] = (),
+        clock_unreliable: Iterable[tuple[float, float | None]] = (),
     ) -> None:
         self._running = tuple(running)
         self._blind = tuple(blind)
+        self._clock = tuple(clock_unreliable)
 
     @property
-    def blind_intervals(self) -> tuple[tuple[float, float | None], ...]:
+    def blind_intervals(self) -> tuple[BlindInterval, ...]:
         return self._blind
 
     @property
     def running_intervals(self) -> tuple[tuple[float, float | None], ...]:
         return self._running
 
+    @property
+    def clock_unreliable_intervals(self) -> tuple[tuple[float, float | None], ...]:
+        return self._clock
+
     @classmethod
     def from_events(cls, events: Iterable[MachineEvent]) -> "CoverageMap":
         ordered = sorted(events, key=lambda item: item.wall_time)
+        starts = [
+            event.wall_time
+            for event in ordered
+            if event.type is EventType.RECORDER_STARTED
+        ]
+
+        def next_start_after(moment: float) -> float | None:
+            for start in starts:
+                if start > moment:
+                    return start
+            return None
+
         running: list[tuple[float, float | None]] = []
-        blind: list[tuple[float, float | None]] = []
+        blind: list[BlindInterval] = []
+        clock: list[tuple[float, float | None]] = []
         run_start: float | None = None
-        blind_start: float | None = None
         saw_start = False
 
         for event in ordered:
             moment = event.wall_time
+
             if event.type is EventType.RECORDER_STARTED:
-                if blind_start is not None:
-                    blind.append((blind_start, moment))
-                    blind_start = None
                 if not saw_start:
-                    blind.append((float("-inf"), moment))
+                    blind.append(
+                        BlindInterval(
+                            float("-inf"),
+                            moment,
+                            (),
+                            "before_recorder_started",
+                        )
+                    )
                 saw_start = True
                 run_start = moment
             elif event.type is EventType.RECORDER_STOPPED:
                 if run_start is not None:
                     running.append((run_start, moment))
                     run_start = None
-            elif event.type in _BLINDING_GAPS and blind_start is None:
-                blind_start = moment
+            elif event.type is EventType.CLOCK_JUMP:
+                # Wall-clock ordering is not trustworthy after a step, so the
+                # interval is marked rather than ignored: correlation compares
+                # on wall time, and a silent step can move a claim across a
+                # start/stop boundary without any gap being reported.
+                clock.append((moment, next_start_after(moment)))
+            elif event.type in _BLINDING_GAPS:
+                note = event.coverage_note
+                end = note.recovered_at if note else None
+                if end is None:
+                    # Without a stated recovery, the gap runs until the recorder
+                    # says it started again — never "forever" by assumption.
+                    end = next_start_after(moment)
+                blind.append(
+                    BlindInterval(
+                        moment,
+                        end,
+                        note.affected if note else (),
+                        event.type.value,
+                    )
+                )
 
         if run_start is not None:
             running.append((run_start, None))
-        if blind_start is not None:
-            blind.append((blind_start, None))
-        return cls(running, blind)
+        return cls(running, blind, clock)
 
     @staticmethod
     def _within(interval: tuple[float, float | None], timestamp: float) -> bool:
@@ -223,13 +319,23 @@ class CoverageMap:
             return False
         return end is None or timestamp < end
 
-    def is_blind(self, timestamp: float) -> bool:
-        if any(self._within(interval, timestamp) for interval in self._blind):
-            return True
+    def is_blind(self, timestamp: float, *, affected: str | None = None) -> bool:
+        """Whether the recorder was blind at ``timestamp``, optionally scoped.
+
+        ``affected`` is a capability or event-type name. A gap that names what
+        it affects only covers that subject; an unscoped gap covers everything,
+        which is what an unscoped producer is entitled to claim.
+        """
+        for interval in self._blind:
+            if interval.covers(timestamp) and interval.applies_to(affected):
+                return True
         return not self.recorder_running_at(timestamp)
 
     def recorder_running_at(self, timestamp: float) -> bool:
         return any(self._within(interval, timestamp) for interval in self._running)
+
+    def clock_unreliable_at(self, timestamp: float) -> bool:
+        return any(self._within(interval, timestamp) for interval in self._clock)
 
 
 @dataclass(frozen=True)
@@ -280,40 +386,66 @@ class CorrelationReport:
         }
 
 
+def _claim_subject(claim: AgentClaim) -> str | None:
+    """What an event-type name for this claim's action, for scoped coverage."""
+    event_type = ACTION_ALIASES.get(claim.action.lower())
+    return event_type.value if event_type else None
+
+
 def _compare_targets(
-    claim_target: str | None,
-    event_target: str | None,
-    event_type: EventType,
+    claim: AgentClaim,
+    event: MachineEvent,
     policy: PrivacyPolicy,
 ) -> tuple[bool, bool]:
     """Compare an agent's target with an observed one, after identical treatment.
 
     Returns ``(agree, decidable)``.
 
-    Redaction can drop a target, and when it does the comparison is genuinely
-    impossible — *unless* the other side survived. A surviving event target
-    proves the path was inside the allowed roots; a dropped claim target proves
-    it was not. So one surviving and one dropped is a decidable disagreement,
-    not an undecidable one. Only when both are dropped is there nothing to
-    compare, and that is reported as undecidable rather than as agreement: a
-    comparison that cannot be made is not a match.
+    The reason a target is missing decides what can be concluded, so this works
+    from ``target_state`` rather than from ``None``:
+
+    - UNKNOWN on either side — nobody recorded why, so nothing follows. This is
+      the case that used to return agreement, and it produced a confirmed match
+      between a redacted private path and a claim that never had a target.
+    - ABSENT on both sides — both accounts explicitly say there was no target.
+      That is agreement about the absence, stated rather than inferred.
+    - ABSENT on one side only — one had a target and the other did not.
+    - REDACTED on the event side with the claim's target surviving the same
+      policy — the event's path was outside the allowed roots and the claim's
+      was inside, so they differ.
+    - REDACTED on both sides — nothing left to compare.
     """
-    if claim_target is None and event_target is None:
-        return True, True
-    if claim_target is None or event_target is None:
+    claim_state = claim.target_state
+    event_state = event.target_state
+
+    if TargetState.UNKNOWN in (claim_state, event_state):
         return False, False
 
-    if event_type is EventType.CONNECT:
-        expected = coarsen_destination(claim_target)
-    else:
-        redacted = policy.redact_path(claim_target)
-        if redacted.value is None:
-            # The claim's path was dropped, so it was outside the allowed roots.
-            # The event's target survived, so it was inside them. Different.
-            return False, True
-        expected = redacted.value
+    if claim_state is TargetState.ABSENT and event_state is TargetState.ABSENT:
+        return True, True
 
-    return expected == event_target, True
+    if TargetState.ABSENT in (claim_state, event_state):
+        return False, True
+
+    # Both sides had a target. Resolve the claim's through the same policy the
+    # producer applied to the event, so a basename is not compared to a path.
+    if event.type is EventType.CONNECT:
+        expected = coarsen_destination(claim.target) if claim.target else None
+    else:
+        redacted = policy.redact_path(claim.target) if claim.target else None
+        expected = redacted.value if redacted else None
+
+    if event_state is TargetState.REDACTED:
+        if expected is None:
+            return False, False
+        return False, True
+
+    if expected is None:
+        # The claim's target was dropped while the event's survived, so the
+        # event's was inside the allowed roots and the claim's was not.
+        return False, True
+
+    return expected == event.target, True
 
 
 def correlate(
@@ -355,9 +487,7 @@ def correlate(
                 continue
             if ACTION_ALIASES.get(claim.action.lower()) is not event.type:
                 continue
-            same, decidable = _compare_targets(
-                claim.target, event.target, event.type, policy
-            )
+            same, decidable = _compare_targets(claim, event, policy)
             if not decidable:
                 undecidable.append(index)
             elif same:
@@ -420,10 +550,20 @@ def correlate(
     for index, claim in enumerate(claims):
         if index in used_claims:
             continue
+        # Scoped to what this claim is about: losing file tracing does not make
+        # an exec claim unobservable.
+        affected = _claim_subject(claim)
         if not coverage.recorder_running_at(claim.wall_time):
             status = CorrelationStatus.RECORDER_UNAVAILABLE
             reason = "recorder_not_running"
-        elif coverage.is_blind(claim.wall_time):
+        elif coverage.clock_unreliable_at(claim.wall_time):
+            # Wall time is what this comparison runs on, so a clock step makes
+            # the comparison unreliable rather than merely inconvenient. Marking
+            # it beats silently placing the claim on the wrong side of a
+            # boundary.
+            status = CorrelationStatus.UNMATCHED_DUE_TO_GAP
+            reason = "wall_clock_unreliable_at_claim_time"
+        elif coverage.is_blind(claim.wall_time, affected=affected):
             status = CorrelationStatus.UNMATCHED_DUE_TO_GAP
             reason = "recorder_blind_at_claim_time"
         else:

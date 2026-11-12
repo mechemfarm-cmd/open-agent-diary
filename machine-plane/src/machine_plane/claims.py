@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .correlation import AgentClaim
+from .events import TargetState
 
 #: Tool and action names mapped to the canonical verbs ``correlation`` knows.
 #: An unrecognised name is reported rather than matched loosely: a claim that
@@ -162,6 +163,20 @@ def adapt_record(
     if target is not None:
         target = str(target)
 
+    # A record that carries a target states it. A record that does not has not
+    # said there was none, so the claim stays UNKNOWN rather than asserting an
+    # absence nobody claimed. A record may say so explicitly.
+    declared_state = payload.get("target_state")
+    if declared_state is not None:
+        try:
+            target_state = TargetState(str(declared_state))
+        except ValueError:
+            return None, AdaptProblem(line_number, "unknown_target_state"), used_default
+    else:
+        target_state = (
+            TargetState.PRESENT if target is not None else TargetState.UNKNOWN
+        )
+
     monotonic = payload.get("monotonic_time")
     tool = payload.get("tool")
 
@@ -173,6 +188,7 @@ def adapt_record(
             target=target,
             monotonic_time=float(monotonic) if monotonic is not None else None,
             tool=str(tool) if tool is not None else None,
+            target_state=target_state,
         ),
         None,
         used_default,

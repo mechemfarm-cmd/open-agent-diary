@@ -24,8 +24,10 @@ from machine_plane.correlation import (
 from machine_plane.events import EventType
 from machine_plane.privacy import PathDisplay, PrivacyPolicy
 from machine_plane.testing import (
+    DATABASE_DRIVERS,
     MockProducer,
     action_event,
+    imported_modules,
     make_registration,
 )
 
@@ -136,7 +138,15 @@ class JsonlTest(unittest.TestCase):
 
 class BoundaryTest(unittest.TestCase):
     def test_the_adapter_cannot_reach_a_database(self) -> None:
-        """The boundary is structural: this module opens text files only."""
+        """A regression tripwire, not a security control.
+
+        Substring checks can be bypassed by aliases, dynamic imports or string
+        construction, so this does not prove the module *cannot* reach a
+        database. What it does prove is that a future edit which adds
+        ``sqlite3``, ``sqlalchemy``, ``psycopg``, ``pymysql`` or a direct
+        ``connect(`` to a deliberately neutral module fails immediately, which is
+        the drift the architectural boundary needs protected against.
+        """
         source = inspect.getsource(claims_module)
         for forbidden in (
             "sqlite3",
@@ -147,6 +157,10 @@ class BoundaryTest(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+
+    def test_no_database_driver_is_imported(self) -> None:
+        """The stronger half: read the import statements, not the text."""
+        self.assertEqual(imported_modules(claims_module) & DATABASE_DRIVERS, set())
 
     def test_the_only_file_it_opens_is_the_export(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

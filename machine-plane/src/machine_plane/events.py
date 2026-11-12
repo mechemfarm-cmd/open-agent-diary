@@ -24,7 +24,7 @@ from .capabilities import CapabilityReport
 from .identity import IdentityConfidence, ProcessIdentity
 from .privacy import FORBIDDEN_CONTENT_KEYS
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SchemaMismatch(Exception):
@@ -76,6 +76,14 @@ ACTION_EVENT_TYPES = frozenset(
     }
 )
 
+#: Events that mean the recorder could not see, rather than that nothing
+#: happened. **Deliberately incomplete as a coverage contract.** There is no
+#: distinct disk-full or dropped-events type: disk-full is reported as
+#: ``SINK_UNAVAILABLE`` with a ``CoverageNote.lost`` count, and recovery is
+#: carried by ``CoverageNote.recovered_at`` on the gap itself rather than by a
+#: separate marker. Treat this set as a start, not as a taxonomy that covers
+#: every way coverage can fail, and extend it when a producer needs a
+#: distinction the current set cannot express.
 GAP_EVENT_TYPES = frozenset(
     {
         EventType.RECORDER_STARTED,
@@ -113,8 +121,101 @@ class CoverageState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class TargetState(str, Enum):
+    """Why a target is what it is.
+
+    ``None`` on its own is ambiguous, and the ambiguity is not harmless: it can
+    mean the action genuinely had no target, that a target was removed by
+    redaction, or that nobody recorded one. Treating those as the same thing
+    lets a redacted private path "agree" with a targetless claim, which is a
+    confirmed match the system has not earned.
+    """
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    REDACTED = "redacted"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class CoverageNote:
+    """Structured detail attached to a gap event.
+
+    A gap with no scope is a claim of *global* blindness, and that is almost
+    never true: losing file tracing does not invalidate an exec observation.
+    A gap with no end is likewise a claim that the recorder stayed blind
+    forever, which a recovered buffer overflow does not mean.
+    """
+
+    #: Capability or event-type names this gap applies to. Empty means the
+    #: producer did not scope it, which callers must treat as unscoped rather
+    #: than as everything.
+    affected: tuple[str, ...] = ()
+    #: When coverage resumed, if the producer knows.
+    recovered_at: float | None = None
+    #: How many events were lost, if counted.
+    lost: int | None = None
+
+    @property
+    def scoped(self) -> bool:
+        return bool(self.affected)
+
+    def to_dict(self) -> dict:
+        return {
+            "affected": list(self.affected),
+            "recovered_at": self.recovered_at,
+            "lost": self.lost,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict | None) -> "CoverageNote | None":
+        if not payload:
+            return None
+        return cls(
+            affected=tuple(payload.get("affected") or ()),
+            recovered_at=payload.get("recovered_at"),
+            lost=payload.get("lost"),
+        )
+
+
 def event_kind(event_type: EventType) -> EventKind:
     return EventKind.GAP if event_type in GAP_EVENT_TYPES else EventKind.ACTION
+
+
+class ExecOutcome(str, Enum):
+    """Whether an exec observation is an attempt or a completed transition."""
+
+    ATTEMPTED = "attempted"
+    SUCCEEDED = "succeeded"
+
+
+#: Results that mean the operation completed. Anything else — an error string, a
+#: missing result, an unrecognised value — is not a completed transition.
+_SUCCESS_RESULTS = frozenset({"ok", "success", "succeeded", "0"})
+
+
+def exec_outcome(event: "MachineEvent") -> ExecOutcome:
+    """Classify an EXEC event as an attempt or a completed image transition.
+
+    A producer watching ``execve`` entry records attempts, and one command can
+    produce a dozen failed ``$PATH`` probes before the real binary runs — the
+    Stage 0 probe measured 16 entries and 15 failures for a single
+    ``/usr/bin/env echo hi``. Only a producer that observes the outcome can claim
+    a transition, and ``result`` is that evidence.
+
+    So ``EXEC`` means *attempted* unless the record says otherwise, and the core
+    says so here rather than leaving every consumer to guess. A producer that
+    emits syscall entries without outcomes produces attempts, which is correct
+    and useful; a producer that wants to claim a process actually started has to
+    record the result that proves it.
+    """
+    if event.type is not EventType.EXEC:
+        raise ValueError(f"{event.type.value} is not an exec event")
+    if event.result is None:
+        return ExecOutcome.ATTEMPTED
+    if str(event.result).lower() in _SUCCESS_RESULTS:
+        return ExecOutcome.SUCCEEDED
+    return ExecOutcome.ATTEMPTED
 
 
 @dataclass(frozen=True)
@@ -135,6 +236,8 @@ class MachineEvent:
     target: str | None = None
     result: str | None = None
     platform_details: Mapping[str, Any] = field(default_factory=dict)
+    target_state: TargetState = TargetState.UNKNOWN
+    coverage_note: CoverageNote | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -146,6 +249,15 @@ class MachineEvent:
         if event_kind(self.type) is EventKind.ACTION and self.identity is None:
             raise ValueError(
                 f"{self.type.value} is an action event and requires a process identity"
+            )
+        if self.target_state is TargetState.PRESENT and self.target is None:
+            raise ValueError(
+                "target_state is PRESENT but no target is recorded; use ABSENT, "
+                "REDACTED or UNKNOWN instead"
+            )
+        if self.target is not None and self.target_state is TargetState.UNKNOWN:
+            raise ValueError(
+                "a recorded target needs a target_state; do not leave it unknown"
             )
 
     def content_violations(self) -> tuple[str, ...]:
@@ -208,6 +320,10 @@ class MachineEvent:
             "monotonic_time": self.monotonic_time,
             "wall_time": self.wall_time,
             "target": self.target,
+            "target_state": self.target_state.value,
+            "coverage_note": (
+                self.coverage_note.to_dict() if self.coverage_note else None
+            ),
             "result": self.result,
             "platform_details": dict(self.platform_details),
         }
@@ -251,6 +367,8 @@ class MachineEvent:
                 for item in payload.get("capabilities_at_capture", [])
             ),
             target=payload.get("target"),
+            target_state=TargetState(payload.get("target_state", "unknown")),
+            coverage_note=CoverageNote.from_dict(payload.get("coverage_note")),
             result=payload.get("result"),
             platform_details=payload.get("platform_details") or {},
         )

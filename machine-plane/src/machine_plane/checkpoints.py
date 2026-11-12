@@ -50,13 +50,20 @@ class CheckpointSink(Protocol):
 
 
 class MemoryCheckpointSink:
-    """A sink that keeps checkpoints in memory. For tests and dry runs."""
+    """A sink that keeps checkpoints in memory. For tests and dry runs.
+
+    The default trust domain is ``UNKNOWN``, like every other sink. It would be
+    convenient for a test default to be ``SEPARATE_HOST``, and that is exactly
+    why it is not: a dry run that quietly reports ``evidence=True`` teaches
+    callers the overclaim this module exists to prevent. A test that wants the
+    off-box case asks for it by name.
+    """
 
     def __init__(
         self,
         *,
         name: str = "memory",
-        trust_domain: TrustDomain = TrustDomain.SEPARATE_HOST,
+        trust_domain: TrustDomain = TrustDomain.UNKNOWN,
     ) -> None:
         self.name = name
         self.trust_domain = trust_domain

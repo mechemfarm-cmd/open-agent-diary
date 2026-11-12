@@ -18,7 +18,7 @@ from machine_plane.export import (
     write_claims,
     write_export,
 )
-from machine_plane.testing import make_claim
+from machine_plane.testing import DATABASE_DRIVERS, imported_modules, make_claim
 
 WALL = 1_700_000_000.0
 
@@ -160,10 +160,26 @@ class ValidationTest(unittest.TestCase):
 
 class BoundaryTest(unittest.TestCase):
     def test_the_exporter_cannot_reach_a_database(self) -> None:
+        """A regression tripwire, not a security control.
+
+        Substring matching cannot survive an alias, a dynamic import or string
+        construction, so this is not proof the module *cannot* reach a database.
+        It is the guard against the drift that matters: a future edit adding a
+        driver to a deliberately neutral module fails on the spot.
+        """
         source = inspect.getsource(export_module)
         for forbidden in ("sqlite3", "sqlalchemy", "psycopg", "pymysql", "connect("):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+
+    def test_no_database_driver_is_imported(self) -> None:
+        """The stronger half: read the import statements, not the text.
+
+        Complementary to the tripwire above — an AST read is not fooled by a
+        driver name appearing in a comment or docstring, and does not have to
+        guess at call syntax.
+        """
+        self.assertEqual(imported_modules(export_module) & DATABASE_DRIVERS, set())
 
     def test_the_format_version_is_declared(self) -> None:
         self.assertEqual(EXPORT_VERSION, 1)

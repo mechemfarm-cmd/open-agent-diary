@@ -23,9 +23,11 @@ from typing import Any, Protocol
 from .capabilities import CapabilitySet
 from .events import (
     PATH_EVENT_TYPES,
+    CoverageNote,
     EventType,
     MachineEvent,
     PrivacyMode,
+    TargetState,
 )
 from .identity import IdentityConfidence
 from .privacy import PrivacyPolicy, coarsen_destination
@@ -47,6 +49,8 @@ class RawEvent:
     result: str | None = None
     details: dict | None = None
     identity_confidence: IdentityConfidence = IdentityConfidence.CERTAIN
+    target_state: TargetState = TargetState.UNKNOWN
+    coverage_note: CoverageNote | None = None
 
 
 class Sink(Protocol):
@@ -91,14 +95,27 @@ class Producer(ABC):
             )
 
         target = event.target
-        if event.type in PATH_EVENT_TYPES and target is not None:
-            target = self._policy.redact_path(target).value
-        elif event.type is EventType.CONNECT and target is not None:
-            target = coarsen_destination(target)
+        target_state = event.target_state
+        if target is not None:
+            if event.type in PATH_EVENT_TYPES:
+                target = self._policy.redact_path(target).value
+            elif event.type is EventType.CONNECT:
+                target = coarsen_destination(target)
+            # Redaction only ever moves a target from present to redacted. It
+            # never invents an absent target, and never leaves a dropped one
+            # indistinguishable from one that was never there.
+            target_state = (
+                TargetState.PRESENT if target is not None else TargetState.REDACTED
+            )
 
         details, _removed = self._policy.sanitize_details(dict(event.platform_details))
 
-        return replace(event, target=target, platform_details=details)
+        return replace(
+            event,
+            target=target,
+            target_state=target_state,
+            platform_details=details,
+        )
 
     def annotate(self, event: MachineEvent) -> MachineEvent:
         """Stamp provenance so no event can masquerade as another platform's."""

@@ -8,11 +8,21 @@ Stage 0 eventually picks.
 
 from __future__ import annotations
 
+import ast
+import inspect
+
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .capabilities import Capability, CapabilityReport, CapabilitySet
-from .events import CoverageState, EventType, MachineEvent, PrivacyMode
+from .events import (
+    CoverageNote,
+    CoverageState,
+    EventType,
+    MachineEvent,
+    PrivacyMode,
+    TargetState,
+)
 from .identity import (
     DomainType,
     IdentityConfidence,
@@ -91,6 +101,34 @@ def make_registration(
     )
 
 
+#: Modules a deliberately neutral module must never import. Read from the AST
+#: rather than searched for in the text.
+DATABASE_DRIVERS = frozenset(
+    {"sqlite3", "sqlalchemy", "psycopg", "psycopg2", "pymysql", "MySQLdb", "asyncpg"}
+)
+
+
+def imported_modules(module: Any) -> set[str]:
+    """Top-level module names a module imports, read from its source AST.
+
+    Stronger than substring matching, and complementary to it: this reads actual
+    import statements, so it is not fooled by a name appearing in a comment or a
+    docstring, and it does not have to guess at call syntax. It is still not a
+    security control — a dynamic import defeats it — which is why it is paired
+    with the substring tripwire rather than replacing it.
+    """
+    tree = ast.parse(inspect.getsource(module))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.level == 0:
+                names.add(node.module.split(".")[0])
+    return names
+
+
 def make_claim(
     action: str = "write",
     *,
@@ -99,9 +137,22 @@ def make_claim(
     wall_time: float = 1_700_000_000.0,
     monotonic_time: float | None = 10.0,
     tool: str | None = "write_file",
+    target_state: "TargetState | None" = None,
 ) -> "AgentClaim":
-    """One action the agent declares it took."""
+    """One action the agent declares it took.
+
+    ``target_state`` defaults to PRESENT when a target is given and ABSENT when
+    it is not — an explicit statement about the absence, which is what a claim
+    has to make before the absence can mean anything. Pass UNKNOWN explicitly to
+    model a claim that simply does not say, which is a different thing.
+    """
     from .correlation import AgentClaim
+    from .events import TargetState as _TargetState
+
+    if target_state is None:
+        target_state = (
+            _TargetState.PRESENT if target is not None else _TargetState.ABSENT
+        )
 
     return AgentClaim(
         capture_id=capture_id,
@@ -110,6 +161,7 @@ def make_claim(
         target=target,
         monotonic_time=monotonic_time,
         tool=tool,
+        target_state=target_state,
     )
 
 
@@ -150,6 +202,8 @@ class MockProducer(Producer):
             target=raw.target,
             result=raw.result,
             platform_details=dict(raw.details or {}),
+            target_state=raw.target_state,
+            coverage_note=raw.coverage_note,
         )
 
 
@@ -160,13 +214,21 @@ def gap_event(
     monotonic_time: float = 10.0,
     details: dict | None = None,
     result: str | None = None,
+    affected: tuple[str, ...] = (),
+    recovered_at: float | None = None,
+    lost: int | None = None,
 ) -> RawEvent:
     """A coverage or lifecycle event.
 
     Separate from ``action_event`` because a gap event has no process identity
     by definition — it reports that something could not be observed, not that
-    something was.
+    something was. It carries a ``CoverageNote`` so a gap can say what it
+    affects and when it ended, rather than claiming global and permanent
+    blindness.
     """
+    note = None
+    if affected or recovered_at is not None or lost is not None:
+        note = CoverageNote(affected=affected, recovered_at=recovered_at, lost=lost)
     return RawEvent(
         type=event_type,
         monotonic_time=monotonic_time,
@@ -175,6 +237,8 @@ def gap_event(
         target=None,
         result=result,
         details=details or {},
+        target_state=TargetState.ABSENT,
+        coverage_note=note,
     )
 
 
@@ -196,4 +260,5 @@ def action_event(
         result="ok",
         details=details or {},
         identity_confidence=IdentityConfidence.CERTAIN,
+        target_state=TargetState.PRESENT if target is not None else TargetState.ABSENT,
     )
