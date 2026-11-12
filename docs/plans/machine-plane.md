@@ -1,217 +1,360 @@
 # Agent Diary — Machine Plane
 
-**Status:** design sketch. Nothing is built. Written to be argued with.
+**Status:** design sketch, revision 2. Nothing is built.
 
-**One-line idea:** Agent Diary records what an agent *says* it did. This adds an
-independent record of what the machine *actually did*, and joins the two.
+**Revision 1 was reviewed** (Alice, branch `docs/machine-plane`, tip `64feaa1`).
+Its central finding is accepted: revision 1 described an observability pipeline
+while claiming a trustworthy audit product. This revision separates those two
+things, states the trust boundary explicitly, and replaces the guarantee,
+privacy, correlation, ingestion and loss models the review identified as
+blockers.
+
+**One-line idea:** Agent Diary records what an agent *said* it did. This adds an
+independent record of what the machine *observed happening*, and compares them —
+with explicit uncertainty and explicit gaps.
 
 ---
 
-## 1. The idea in plain language
+## 1. The claim, stated honestly
 
-Right now Agent Diary keeps a work trace: the agent called this tool, ran that
-command, edited this file. That is the agent's own account of itself.
+### 1.1 What the strong version of this is
 
-This proposal adds a second account, taken from the operating system rather than
-from the agent. The kernel does not care what the agent intended; it only records
-what actually happened — this process executed, this file was opened for writing,
-this connection was made.
+Not this:
 
-Two accounts of the same events. When they agree, you have a history you can
-trust. When they disagree, you have the most useful signal in agent safety:
-**the agent's account and the machine's account do not match.**
+> "The agent says X; the machine proves whether X happened."
 
-The mismatch is the product. Everything else is plumbing.
+This:
 
-## 2. Mental image
+> "A machine-observed evidence stream lets us compare the agent's declared
+> actions against independently observed effects, with explicit uncertainty and
+> loss states."
 
-A flight recorder for a machine that runs agents.
+The headline — *the mismatch is the product* — survives only in that weaker form.
+A mismatch is a **signal for investigation**, not a finding of fact. It cannot be
+a finding of fact while two other explanations remain open: the correlation
+failed, or the sensor did not see the event.
 
-Every consequential action gets one case number. The agent's side says "I am
-about to write to this file, because you asked me to." The machine's side says
-"process 4821 opened that file for writing at 14:03." The recorder binds them
-into a single record: who asked, what was authorised, what actually happened,
-and whether those agree.
+### 1.2 The trust boundary, stated plainly
+
+**Guaranteed:** an unprivileged agent cannot stop, reconfigure, or write to the
+recorder, and cannot author or alter a machine-plane event through normal
+user-space permissions.
+
+**Not guaranteed:** a compromised host; a root or sudo-capable agent; a kernel
+exploit against the eBPF path; rollback of the disk to an earlier state; event
+loss under buffer exhaustion; or availability of the recorder at all.
+
+The consequence is a design rule, not a caveat: **if this document uses the words
+*evidence*, *integrity*, or *flight recorder*, then off-box checkpoints are
+required, not optional.** A local hash chain detects modification of the
+surviving chain; it cannot prove that an earlier segment was not deleted, nor
+that the machine was not rolled back. Where checkpoints are absent, the honest
+name for this system is *observability with loss reporting* — not audit.
+
+### 1.3 Threat model
+
+| Question | Answer |
+| --- | --- |
+| Protects against an unprivileged, prompt-injected agent? | **Yes** — the primary threat. |
+| Protects against an agent with sudo or root? | **No.** Out of scope; see §11. |
+| Protects against a compromised kernel? | **No.** |
+| Protects against physical disk access? | **No**, absent off-box checkpoints. |
+| Is a full disk an availability or integrity failure? | **Availability** — but reported as a gap event, never as silence. |
+
+The scope of the guarantee is deliberately narrow. An honest narrow guarantee is
+worth more than a broad one that cannot be tested.
+
+## 2. Privacy: two modes, and they are different products
+
+Revision 1 claimed metadata-only while naming AgentSight as its model sensor.
+AgentSight's intent stream captures plaintext at the TLS boundary — prompts,
+responses, headers, network targets. That is content. The contradiction was real;
+it is resolved by separating the modes rather than by softening the claim.
+
+**Mode A — metadata-only. The default. Always on unless explicitly changed.**
+
+- syscall type, process name, file path (subject to §9), network destination
+  (coarse), timestamps, result
+- never file contents, never command arguments, never payloads, never prompts
+- never credential, key, browser-data or cache paths
+
+**Mode B — content-bearing intent capture. Off by default.**
+
+- prompt and model-traffic capture, of the kind AgentSight performs at the TLS
+  boundary
+- requires explicit, recorded consent for that source
+- labelled as content-bearing everywhere it appears in a view
+- revocation is terminal, as elsewhere in Agent Diary
+
+**The consequence the review drew, and it is the important one:** with Mode B
+off, the intent stream disappears. The machine plane then holds only the
+system-effect side, compared against Agent Diary's *existing* work traces. That
+is still useful — but it is a different product from the one revision 1
+described, and it is the product this document is actually about. Mode B is an
+extension, not the premise.
 
 ## 3. What already exists — do not rebuild these
 
-The technology is largely solved. The gap is packaging, comprehension, and
-privilege. Anything built here should be a consumer of these, not a replacement.
+**Agent plane — already ours.** Agent Diary work traces: tool calls, terminal
+commands, file edits. This is the agent's own account.
 
-**Agent plane (Layer 1) — already ours.** Agent Diary work traces: tool calls,
-terminal commands, file edits, already being written daily.
-
-**Machine plane sensors (Layer 2):**
-- `eunomia-bpf/agentsight` — open source, arXiv:2508.02736. Hooks eBPF at two
-  boundaries: an *intent stream* (uprobes on `SSL_read`/`SSL_write`, capturing
-  decrypted model traffic without agent cooperation or a proxy) and an *action
-  stream* (tracepoints for process and file activity). This is the closest
-  existing work to the correlation idea here.
+**Machine-plane sensors:**
+- `eunomia-bpf/agentsight` — the closest existing work (arXiv:2508.02736). eBPF
+  at two boundaries: intent (TLS) and action (tracepoints). Per §2, only its
+  action side is usable in Mode A.
 - Tetragon (Cilium), Falco (CNCF), Tracee (Aqua), auditd, Sysdig.
 
-**Integrity (Layer 3):** immudb (Merkle-backed, clients verify server responses),
-Trillian (transparency logs), hash chaining, signed checkpoints.
+**Integrity:** immudb, Trillian, hash chaining, signed checkpoints.
 
-**Kill switch prior art:** OWASP AISVS C09-06 (shutdown and graceful degradation),
-CrowdStrike Falcon Guardian (endpoint agent termination, November 2026), and
-Stanford Law's March 2026 argument that *kill switches don't work if the agent
-writes the policy*.
+**Kill-switch prior art:** OWASP AISVS C09-06; CrowdStrike Falcon Guardian
+(November 2026); Stanford Law, March 2026 — *kill switches don't work if the
+agent writes the policy*.
 
-**Therefore:** the deliverable is not a sensor. It is a record format, a
-correlation rule, a privilege model, and a view a non-technical person can read.
+**Therefore the deliverable is not a sensor.** It is a record format, an
+identity model, an ingestion boundary, a loss model, and a view that ranks
+exceptions. The sensor is a dependency, and Stage 0 decides which one.
 
 ## 4. Architecture
 
-Three producers, one record format, one view.
-
 ```
-  agent plane        ──┐
-  (work traces)        │
-                       ├──►  correlated record  ──►  hash-chained log  ──►  dashboard
-  machine plane      ──┤          (one file per    (append-only,        (timeline +
-  (eBPF sensor)        │           run/session)     off-box checkpoint)  divergence flags
-                       │
-  approval plane     ──┘
+  agent plane        ─┐
+  (work traces)       │
+                      ├──►  correlated record  ──►  append-only log  ──►  ranked view
+  machine plane     ──┤        (per run)            (+ off-box          (exceptions,
+  (eBPF, unpriv.)     │                              checkpoints)        not a log)
+                      │
+  approval plane    ──┘
   (consent decisions)
 ```
 
-The machine plane is a **separate, optional producer** that writes into Agent
-Diary. It is not a limb of Agent Diary itself — see §8.
+**The machine plane is a separate companion package.** The reason is not merely
+that Agent Diary's `pyproject.toml` declares no dependencies. The stronger
+reasons are: root and capability requirements; Linux/eBPF-specific dependencies;
+a separate security review; an independent release cadence; optional
+installation; keeping privileged code out of the Diary server; different failure
+and upgrade semantics; and keeping core Agent Diary usable on macOS, Windows and
+unprivileged installs.
 
-## 5. The record
+Interfaces between the two:
 
-One event, one row. Fields chosen so a human can read it and a machine can
-verify it:
+- a **versioned machine-event ingestion protocol** that the companion targets
+- **no importing of Agent Diary internals** by the companion
+- **no direct writes to the Diary SQLite database** by the companion
 
-- `event_id` — stable, content-derived
-- `run_id` — the correlation key; one per agent run/session
-- `plane` — `agent` | `machine` | `approval`
-- `actor` — which agent, which process, which user
-- `intent` — what the agent said it was doing (agent plane only; empty otherwise)
-- `action` — exec / open-write / unlink / connect / chmod / mount
-- `target` — process name or **file path** (never file contents)
-- `result` — ok / denied / failed
-- `prev_hash`, `hash` — the chain link
+## 5. Correlation identity — supervisor-issued, not agent-declared
 
-## 6. Correlation — the hard part
+Revision 1 proposed `run_id` propagated through the environment, plus PID
+ancestry, with time as a tiebreaker. That model fails silently in at least twelve
+ways: background processes outliving the run; sudo sanitising the environment;
+systemd-run, cron, containers and SSH detaching; worker pools reused across runs;
+shared helpers; PID reuse; delayed daemon work; concurrent sessions sharing a
+helper tree; namespace crossings; a tool overwriting `run_id`; pooled network
+connections; and filesystem activity outside the original time window.
 
-Nothing joins these layers for free. A kernel event says `pid 4821 wrote /etc/x`;
-an agent trace says `write_file(path="/etc/x")`. Proposed join:
+**The worst outcome is not an unmatched event. It is a plausible but wrong
+match.** So identity moves outside the agent:
 
-1. **run_id** propagated from the agent into the environment of everything it
-   spawns, so every child process inherits it.
-2. **pid + process ancestry** to tie a kernel event back to that run.
-3. **time window** as a tiebreaker, never as the primary key.
+- a capture ID **assigned by the supervisor**, outside the agent
+- each run launched inside a **dedicated cgroup / systemd scope**
+- the recorded identity tuple: **capture ID, cgroup ID, boot ID, PID, PID start
+  time, namespace IDs, ancestry**
+- environment `run_id` is a **hint, never authority**
+- process identity is `boot_id + pid + start_time`, never a bare PID
 
-Where the join fails, the record says `unmatched` rather than guessing. An
-honest gap is more useful than a confident wrong answer.
+Every machine event carries a **reason code and a confidence**, not a boolean:
 
-## 7. Privacy model — the differentiator
+```
+confirmed_match          machine effect and agent claim agree, identity certain
+ambiguous_match          identity plausible but not unique
+delayed_match            effect arrived after the run's window closed
+machine_only             observed effect with no agent claim
+agent_only               agent claim with no observed effect
+unmatched_due_to_scope   outside the recorder's configured scope
+unmatched_due_to_gap     the recorder could not have seen it (§7)
+recorder_unavailable     the recorder was not running
+```
 
-Every comparable tool is built for enterprise compliance and logs everything by
-default. Agent Diary's users run it on the machine where they live. So:
+Time proximity alone may never promote an event to a confident match.
 
-- **Metadata only.** The machine plane records shapes, not contents: process
-  names, file paths, syscall types, timestamps. Never file bytes, never command
-  arguments, never payloads.
-- **Filenames, not contents.** A path tells you what the agent touched. Contents
-  are what would leak a life.
-- **Content is opt-in per source**, exactly as the existing consent model works,
-  and revocation stays terminal.
-- **Exclusions by default:** credentials, keys, browser data, caches.
+## 6. Mismatch taxonomy
 
-This is the thing nobody else has: watch everything the agent does, without
-recording the person's life. It is what makes "record everything" defensible.
+A missing agent claim may mean: a hidden action; an untraced tool wrapper; a
+dropped event; delayed asynchronous work; a daemon acting on the agent's behalf;
+correlation failure; the machine plane not running; a trace written after the
+effect; or the human doing it themselves. These must not all present as
+"divergence".
 
-## 8. Privilege model — the load-bearing decision
+The categories in §5 are the taxonomy. The view ranks *investigable exceptions*
+and names the category each belongs to. A headline count of "3 divergences"
+without categories is not an honest artefact.
 
-If the agent and the recorder run with the same privileges, none of this is
-evidence. A prompt-injected agent can stop the recorder, edit the log, or ignore
-the kill switch. CrowdStrike solves that with a kernel driver and enterprise
-policy; a personal install cannot.
+## 7. Coverage: gaps are first-class
 
-The only honest answer at personal scale is **privilege separation**:
+> A missing event must be distinguishable from "nothing happened."
 
-- the agent runs unprivileged, as an ordinary user
-- the recorder runs above it, in its own domain
-- the agent has no path to stop, edit, or signal the recorder
+This is the finding that reshaped the document. Without it the central claim
+collapses: a mismatch could simply mean the recorder blinked.
 
-Until that holds, "records everything" is a claim, not a guarantee. This is worth
-more design effort than the dashboard.
+The recorder therefore emits explicit **gap events**, as first-class records:
 
-## 9. Kill switch
+```
+recorder_started
+recorder_stopped
+buffer_overflow
+permission_gap
+unsupported_kernel_feature
+sink_unavailable
+clock_jump
+```
 
-Layered, and out-of-band. If the agent can reach the switch, it is not a switch.
+Plus dropped-event counters, ring-buffer overflow counts, and restart markers.
+Any interval not covered by the recorder is a reported gap, never an implicit
+"nothing happened". Coverage appears in every view.
 
-1. **Pause** — the agent stops taking new work; state preserved.
-2. **Freeze** — its process tree is stopped.
-3. **Isolate** — network access revoked.
-4. **Stop** — the run ends.
+## 8. Protected ingestion boundary
 
-Requirements: reachable by a human on a channel the agent does not control; the
-agent cannot write its own policy; the path is exercised often enough to know it
-works. An untested kill switch is a decoration.
+Revision 1 said the machine plane "writes into Agent Diary" without saying how.
+That matters: if the agent can call the same endpoint as the recorder, it can
+submit fake machine events; if the recorder writes straight into the Diary
+database, a privileged process is coupled to an application schema.
 
-## 10. Lightness budget
+```
+  privileged recorder
+    -> protected local Unix socket / root-owned spool
+      -> unprivileged importer
+        -> Agent Diary machine-event records
+```
 
-"Light as possible" and "records everything" are in direct tension. Full syscall
-capture is gigabytes an hour. The resolution is filtering by **consequence**, not
-volume:
+Acceptance conditions:
 
-- scope to the agent's process tree (cgroup or ancestry)
-- capture only consequential syscalls: exec, open-for-write, unlink, connect,
-  chmod, mount
-- no payload capture, no content
-- ring buffer to userspace, no full-fidelity mode by default
+- the agent cannot submit a machine-plane event
+- the agent cannot alter an existing machine event
+- the importer can distinguish recorder-authored events from agent-authored work
+  traces
+- schema or version mismatch **fails closed**
+- partial ingestion is **detectable and resumable**
 
-Target: thousands of events a day, not millions. If the recorder is heavy enough
-that people turn it off, it has failed.
+This boundary is defined before the Agent Diary schema, not after it.
 
-## 11. Dashboard
+## 9. Path privacy
 
-One page, readable by someone who is not a sysadmin:
+Paths are not automatically private. `/home/x/Documents/medical/diagnosis.pdf`
+and `/home/x/.ssh/id_ed25519` are as sensitive as contents. Required:
 
-- **Timeline** — what the agent did, in order, in plain sentences
-- **Divergence** — actions the machine saw that the agent never claimed, and
-  claims the machine never saw. This is the headline.
-- **Authority** — which actions had human approval, which did not
-- **Switch** — stop, with the state of the last check
+- configurable path roots, with redaction by default outside them
+- an explicit decision on **basename versus full path**
+- credential, key and browser-data paths excluded by default
+- a stated hashing rule, salted, resistant to dictionary attack
+- retention and deletion rules for machine events
+- **explicit user consent for the machine plane itself**, separate from the
+  ordinary diary consent
+- a coarse default for network destinations
+- command lines **never captured** — and, because some sensors expose them
+  naturally, an explicit stripping step rather than an assumption
 
-No log viewer. Nobody reads logs. The value is in the ranked exceptions.
+## 10. Loss, retention, clock, crash, disk-full
 
-## 12. Non-goals
+Specified before the hash chain, not after:
 
-- Not a general EDR or intrusion detection system.
-- Not cross-platform in v0. Linux only, where eBPF and auditd exist. macOS
-  (Endpoint Security framework) and Windows (ETW) are separate, later efforts.
-- Not a content archive. Never store file contents.
+- **Retention and rotation.** Machine events accumulate far faster than entries.
+  A maximum allocation and a rotation policy are required.
+- **Sink unavailable.** Write to the protected spool; if the spool also fills,
+  emit `sink_unavailable` and keep counting the loss.
+- **Disk full.** An availability failure, reported as a gap — never silent
+  degradation.
+- **Clock.** Monotonic clock for ordering; wall clock as evidence only. Boot ID
+  recorded. NTP steps and suspend/resume detected and emitted as `clock_jump`.
+- **Ordering.** Per-CPU sequences give only a partial order, so the authoritative
+  order is a **logical sequence number assigned at ingestion**. Timestamps are
+  evidence, not identity.
+- **Crash recovery.** A chain tail may be partial. On restart the tail is sealed
+  with a terminal marker, recovery truncates to the last verified link, and the
+  truncation is recorded as a gap.
+- **Backup and restore.** Restoring an old segment must not resurrect a chain
+  that conflicts with a checkpoint.
+- **Schema migration.** Every record carries its schema version; the importer
+  fails closed on mismatch.
+
+## 11. Kill switch
+
+The requirements are easy; the review is right that pause/freeze/isolate/stop is
+not yet an architecture. Contracts to settle before building:
+
+- **Owner.** A separate system service, out-of-band — not the agent, and not a
+  process the agent can signal.
+- **Freeze.** The cgroup freezer, not `SIGSTOP` against a guessed PID.
+- **Isolate.** Network namespace or firewall rule, with a stated answer on
+  whether it is reversible.
+- **Agent with sudo.** Explicitly outside the guarantee (§1.3).
+- **Controller unavailable.** State the fail direction deliberately, and whether
+  the agent stops or continues.
+- **Testing.** Verified from outside the agent; never trust an agent-reported
+  "stopped".
+- **First implementation.** One manual out-of-band path, no UI, proven once.
+
+## 12. The view
+
+Not a log viewer. Ranked investigable exceptions, showing:
+
+- a timeline in plain sentences, with coverage gaps drawn as gaps
+- exceptions grouped by the §6 categories, not a single "divergence" count
+- authority: which actions had human approval and which did not
+- switch state, and the time of its last verification
+
+Nobody reads logs. The value is in what gets ranked to the top.
+
+## 13. Stage 0 — evaluate, do not build
+
+Run against real activity on Art (the agent's own process tree). Ten questions:
+
+1. Can it trace the agent's actual process tree?
+2. Can it see exec, file writes, unlink, chmod and network effects?
+3. Can it trace processes launched by tool calls?
+4. Does it capture prompts or payloads when Mode A is intended? (§2)
+5. What happens with Python, Node, statically linked binaries, sudo, background
+   jobs?
+6. What percentage of events are dropped?
+7. What privilege does it require on the current kernel?
+8. Can output be exported without adopting its content-bearing schema?
+9. How often does its correlation produce ambiguous or wrong-looking joins?
+10. What are the storage and CPU costs over a normal workday?
+
+Baseline scenarios, each run deliberately and observed: a harmless shell command;
+file creation and modification; a subprocess; a background process; a network
+request; a sudo operation; a command that intentionally fails; two concurrent
+runs.
+
+**Nothing is built until those results exist.**
+
+## 14. Non-goals
+
+- Not a general EDR or intrusion-detection system.
+- Not cross-platform in v0: Linux only. macOS (Endpoint Security) and Windows
+  (ETW) are separate efforts with different mechanisms.
+- Not a content archive. Mode B exists but is not an archive.
 - Not a compliance product.
-- Not a replacement for AgentSight, Tetragon, or Falco — a consumer of them.
+- Not a replacement for AgentSight, Tetragon or Falco — a consumer of one.
 
-## 13. Staged plan
+## 15. Staged plan
 
-**Stage 0 — evaluate, do not build.** One afternoon against real agent activity:
-does AgentSight already give intent-to-effect correlation on this machine? If
-yes, the engine exists and this project is a front end. That answer decides
-everything downstream.
+- **Stage 0 — evaluate** (§13). No code.
+- **Stage 1 — ingestion boundary and identity** (§5, §8). No UI, no chain.
+- **Stage 2 — privilege separation, proven.** The agent cannot reach the
+  recorder, demonstrated rather than asserted.
+- **Stage 3 — chain and checkpoints** (§1.2, §10).
+- **Stage 4 — view and switch** (§11, §12).
 
-**Stage 1 — record format and correlation.** Define the record. Prove the join on
-a single host with one agent. No UI, no kill switch.
+Approval for Stage 0 does not imply approval for Stage 1.
 
-**Stage 2 — privilege separation.** Agent unprivileged, recorder above it. Prove
-the agent cannot reach the recorder.
+## 16. Open questions
 
-**Stage 3 — dashboard and switch.** Only once the record is trustworthy.
-
-## 14. Open questions
-
-- Is the machine plane part of Agent Diary, or a companion package that writes
-  into it? (Current lean: companion, to keep Agent Diary's zero-dependency,
-  local-first contract intact.)
-- What is the retention policy for machine events? They accumulate faster than
-  entries do.
-- Does a divergence raise an alarm, or only appear in the timeline?
-- On a single-machine install, is privilege separation achievable without asking
-  the user to reason about Unix users and groups?
-- If the agent runs in a container or VM, does the machine plane belong inside it
-  or outside it?
+- Retention horizon for machine events, which accumulate far faster than entries.
+- Does a confirmed mismatch ever raise an alarm, or only rank higher in the view?
+- Can privilege separation be made comprehensible to a non-technical operator, or
+  does it need a one-command setup that hides the Unix reasoning?
+- When the agent runs inside a container or VM, does the machine plane belong
+  inside it or outside it?
+- Is Mode B (§2) a road worth travelling at all, given it makes the recorder
+  content-bearing and therefore subject to the strongest consent rules?
+- Off-box checkpoints imply a second machine. Is that acceptable for a
+  single-machine personal install, or does the guarantee have to shrink further?
