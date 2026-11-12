@@ -35,6 +35,7 @@ from .events import EventType
 RANKING: tuple[CorrelationStatus, ...] = (
     CorrelationStatus.MACHINE_ONLY,
     CorrelationStatus.AMBIGUOUS_MATCH,
+    CorrelationStatus.MATCH_NOT_PROVABLE,
     CorrelationStatus.UNMATCHED_DUE_TO_GAP,
     CorrelationStatus.RECORDER_UNAVAILABLE,
     CorrelationStatus.DELAYED_MATCH,

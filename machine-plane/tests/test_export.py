@@ -182,7 +182,7 @@ class BoundaryTest(unittest.TestCase):
         self.assertEqual(imported_modules(export_module) & DATABASE_DRIVERS, set())
 
     def test_the_format_version_is_declared(self) -> None:
-        self.assertEqual(EXPORT_VERSION, 1)
+        self.assertEqual(EXPORT_VERSION, 2)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from machine_plane.killswitch import (
     SwitchAction,
     SwitchState,
     Unauthorised,
+    counter_challenges,
 )
 
 CONTROLLERS = ("human:bill", "supervisor:emily")
@@ -144,7 +145,7 @@ def _requested(**overrides: object) -> KillSwitch:
 
 def _observation(
     switch: KillSwitch,
-    state: SwitchState = SwitchState.STOPPED,
+    state: object = _CURRENT,
     *,
     observer: str = "host:emily",
     source: ObservationSource = ObservationSource.EXTERNAL_VERIFIER,
@@ -152,10 +153,17 @@ def _observation(
     challenge: object = _CURRENT,
     scope: object = _CURRENT,
 ) -> Observation:
-    """A report bound to the switch's latest request, unless told otherwise."""
+    """A report bound to the switch's latest request, unless told otherwise.
+
+    The observed state defaults to the state that request was meant to produce,
+    because an observation of some other state is not proof of this transition.
+    """
+    expected = (
+        switch.records[-1].plan.to_state if switch.records else SwitchState.RUNNING
+    )
     return Observation(
         observer=observer,
-        observed_state=state,
+        observed_state=expected if state is _CURRENT else state,  # type: ignore[arg-type]
         at=at,
         source=source,
         challenge=(
@@ -176,7 +184,30 @@ class VerificationTest(unittest.TestCase):
         accepted = switch.record_observation(_observation(switch))
         self.assertTrue(accepted)
         self.assertTrue(switch.proven)
-        self.assertEqual(switch.verified_state, SwitchState.STOPPED)
+        self.assertEqual(switch.verified_state, SwitchState.PAUSED)
+        self.assertTrue(switch.current_state_verified)
+
+    def test_an_observation_of_the_wrong_state_does_not_count(self) -> None:
+        """The challenge says which transition is being checked.
+
+        A RESUME request answered with STOPPED is not proof the resume happened,
+        even though the challenge, the observer and the scope are all correct.
+        """
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, state=SwitchState.STOPPED)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
+
+    def test_a_stronger_state_is_not_accepted_as_proof(self) -> None:
+        """'Proven paused' and 'proven stopped' are different claims."""
+        switch = _requested()
+        accepted = switch.record_observation(
+            _observation(switch, state=SwitchState.ISOLATED)
+        )
+        self.assertFalse(accepted)
+        self.assertFalse(switch.proven)
 
     def test_a_self_report_does_not_count(self) -> None:
         """'Stopped', said by the thing meant to stop, is not evidence."""
@@ -292,6 +323,61 @@ class TransitionTest(unittest.TestCase):
         with self.assertRaises(InvalidTransition):
             switch.request(SwitchAction.STOP, requested_by="human:bill", at=1.0)
         self.assertEqual(len(switch.records), before)
+
+
+class ProofLifetimeTest(unittest.TestCase):
+    """Proof is bound to a transition, not to the switch's lifetime."""
+
+    def test_a_new_request_invalidates_an_earlier_proof(self) -> None:
+        """Proven paused is not proven frozen."""
+        switch = _requested()
+        self.assertTrue(switch.record_observation(_observation(switch)))
+        self.assertTrue(switch.current_state_verified)
+
+        switch.request(SwitchAction.FREEZE, requested_by="human:bill", at=3.0)
+
+        self.assertFalse(switch.proven)
+        self.assertFalse(switch.current_state_verified)
+        self.assertIsNone(switch.verified_state)
+
+    def test_controller_loss_invalidates_an_earlier_proof(self) -> None:
+        """The loss transition moves the switch to a state nobody observed."""
+        switch = _requested()
+        self.assertTrue(switch.record_observation(_observation(switch)))
+
+        switch.apply_controller_loss(at=3.0)
+
+        self.assertFalse(switch.proven)
+        self.assertFalse(switch.current_state_verified)
+
+    def test_the_new_state_can_be_proved_in_its_turn(self) -> None:
+        switch = _requested()
+        switch.record_observation(_observation(switch))
+        switch.request(SwitchAction.FREEZE, requested_by="human:bill", at=3.0)
+
+        self.assertTrue(switch.record_observation(_observation(switch, at=4.0)))
+        self.assertEqual(switch.verified_state, SwitchState.FROZEN)
+        self.assertTrue(switch.current_state_verified)
+
+
+class ChallengeSourceTest(unittest.TestCase):
+    """The default challenge must not be predictable."""
+
+    def test_the_default_challenge_is_not_a_counter(self) -> None:
+        """Two switches built the same way must not issue the same challenge."""
+        first = _switch()
+        second = _switch()
+        first.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        second.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+
+        self.assertNotEqual(first.records[0].challenge, second.records[0].challenge)
+        self.assertIsNotNone(first.records[0].challenge)
+        self.assertGreaterEqual(len(first.records[0].challenge or ""), 32)
+
+    def test_a_test_can_still_name_its_challenge(self) -> None:
+        switch = _switch(challenge_factory=counter_challenges())
+        switch.request(SwitchAction.PAUSE, requested_by="human:bill", at=1.0)
+        self.assertEqual(switch.records[0].challenge, "challenge-1")
 
 
 class BoundaryTest(unittest.TestCase):

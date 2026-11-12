@@ -27,6 +27,7 @@ from machine_plane.testing import (
     DATABASE_DRIVERS,
     MockProducer,
     action_event,
+    gap_event,
     imported_modules,
     make_registration,
 )
@@ -184,11 +185,12 @@ class IntegrationTest(unittest.TestCase):
         events = list(
             MockProducer(
                 [
+                    gap_event(EventType.RECORDER_STARTED, wall_time=WALL - 100),
                     action_event(
                         EventType.WRITE_ATTEMPT,
                         target="/home/x/work/report.txt",
                         wall_time=WALL,
-                    )
+                    ),
                 ],
                 policy=policy,
             ).events()

@@ -187,6 +187,20 @@ agreement. Reading `None` as agreement let a redacted private path confirm
 against a claim that never had a target — a confirmed match the system had not
 earned.
 
+**The state and the value cannot contradict each other, on either side.** One
+matrix, shared by the event, the claim and the adapter: `PRESENT` requires a
+target, and `ABSENT`, `REDACTED` and `UNKNOWN` all require none. A record that
+carries a real path while claiming absence is refused rather than compared, on
+both sides of the comparison — otherwise the guarantee is only as good as the
+side that happened to be validated.
+
+**The state survives the export.** It is part of the neutral format now, written
+whenever it is not already implied by the target's presence. Without that the
+round trip turned every explicit absence back into `UNKNOWN`, so the agreement
+the core had just learned to make soundly could never reach it through the real
+path. The format version moved to 2, and a contradictory record is reported as a
+problem rather than adapted into a malformed claim.
+
 **A disagreement is categorised, never counted.** Eight statuses, and the view
 ranks the investigable ones. A single "divergence" number tells you nothing
 about what kind of problem you have.
@@ -199,6 +213,14 @@ affects and, where the producer knows it, when coverage resumed — a dropped
 buffer is a bounded loss, not permanent blindness. Before the first
 `recorder_started` nothing is known, and that interval counts as blind rather
 than as quiet.
+
+**A gap limits what a match can prove, not just what an unmatched claim can.**
+Coverage is checked before a matched pair is promoted to confirmed: a match found
+in an interval the recorder could not see is a match nobody observed. Such a pair
+is reported as `match_not_provable` with the reason, rather than as a
+confirmation — otherwise the coverage model's own caveats would sit behind the
+result instead of in front of it. A scoped gap still only affects its own
+subject, so a narrow gap cannot un-prove an unrelated match.
 
 **Wall time is a limitation, so it is handled rather than assumed away.** An
 export carries wall times, not monotonic ones, so correlation compares on wall
@@ -254,21 +276,35 @@ the controller went away is a named prediction
 records an unverified transition. Loss itself needs a lease with a timeout —
 without one, "the controller is gone" is an opinion.
 
-**A switch is not `proven` until a registered observer says so.** "Stopped", said
-by the thing that was meant to stop, is not evidence that it did. The package
-cannot verify that an observer is genuinely outside the scope — only the caller
-can, by deciding who goes in the registration list — so it does the part it can:
-an observation counts only from a registered observer that declares itself an
-external verification. A self-report, or a test calling the method directly, is
-recorded and does not count. The old API accepted a `verified_externally=True`
-boolean from any caller, which is an assertion rather than an observation, and it
-is gone.
+**A switch is not `proven` until a registered observer says so — about that
+transition.** "Stopped", said by the thing that was meant to stop, is not
+evidence that it did. The package cannot verify that an observer is genuinely
+outside the scope — only the caller can, by deciding who goes in the
+registration list — so it does the part it can: an observation counts only from
+a registered observer that declares itself an external verification, quotes the
+challenge issued with the request it answers, names the scope, does not predate
+that request, and reports the state that request was supposed to produce. A
+report of some other state is not proof of this one, so a stronger state is not
+accepted either: "proven paused" and "proven stopped" are different claims. The
+old API accepted a `verified_externally=True` boolean from any caller, which is
+an assertion rather than an observation, and it is gone.
+
+**Proof belongs to a transition, not to the switch.** Every state-changing
+request and every controller-loss transition clears it, because proof that the
+switch was once paused says nothing about the state it is in now.
+`current_state_verified` answers the question the old lifetime flag looked like
+it answered.
+
+**Challenges are unpredictable by default.** A default that is only safe when
+someone remembers to replace it is not a safe default, and a privileged caller
+is exactly the caller least likely to notice. The deterministic counter factory
+still exists for tests, but has to be asked for by name.
 
 **The switch model executes nothing.** It decides authority, state and plans; the
 privileged component that issues real commands is separate work. A test asserts
 the module never grows a `subprocess` import.
 
-**The export format is three required fields and three optional ones.** Every
+**The export format is three required fields and four optional ones.** Every
 field not written is a field that cannot leak. Empty optional fields are omitted
 rather than written as nulls, so a reader cannot mistake "no target recorded" for
 "target recorded as nothing". The validator reports unknown fields rather than

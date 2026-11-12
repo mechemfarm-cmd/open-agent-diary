@@ -80,6 +80,7 @@ from .events import (
     TargetState,
     event_kind,
     exec_outcome,
+    target_is_consistent,
 )
 from .identity import (
     DomainType,
@@ -101,6 +102,7 @@ from .killswitch import (
     SwitchState,
     SwitchStep,
     Unauthorised,
+    counter_challenges,
 )
 from .privacy import (
     DEFAULT_EXCLUDED_FRAGMENTS,
@@ -213,6 +215,8 @@ __all__ = [
     "describe",
     "event_kind",
     "exec_outcome",
+    "target_is_consistent",
+    "counter_challenges",
 ]
 
 __version__ = "0.0.1"

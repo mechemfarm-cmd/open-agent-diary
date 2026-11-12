@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .correlation import AgentClaim
-from .events import TargetState
+from .events import TargetState, target_is_consistent
 
 #: Tool and action names mapped to the canonical verbs ``correlation`` knows.
 #: An unrecognised name is reported rather than matched loosely: a claim that
@@ -175,6 +175,16 @@ def adapt_record(
     else:
         target_state = (
             TargetState.PRESENT if target is not None else TargetState.UNKNOWN
+        )
+
+    # The invariant is enforced at the boundary too, so a contradictory record
+    # is reported rather than turned into a malformed claim that could later
+    # agree with an absent event without its target being compared.
+    if not target_is_consistent(target, target_state):
+        return (
+            None,
+            AdaptProblem(line_number, "target_state_contradicts_target"),
+            used_default,
         )
 
     monotonic = payload.get("monotonic_time")

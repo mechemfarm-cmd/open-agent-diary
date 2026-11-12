@@ -41,11 +41,12 @@ from pathlib import Path
 
 from .claims import TOOL_ACTIONS, iter_jsonl
 from .correlation import AgentClaim
+from .events import TargetState
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 
 REQUIRED_FIELDS = ("capture_id", "action", "wall_time")
-OPTIONAL_FIELDS = ("target", "monotonic_time", "tool")
+OPTIONAL_FIELDS = ("target", "monotonic_time", "tool", "target_state")
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,12 @@ def to_record(claim: AgentClaim) -> dict:
 
     Empty fields are left out rather than written as nulls, so a reader cannot
     mistake "no target recorded" for "target recorded as nothing".
+
+    ``target_state`` is written whenever it is not already implied by the
+    target's presence, so an explicit absence or a redaction survives the
+    boundary. Without it the round trip turned every ABSENT claim back into
+    UNKNOWN, and the agreement the core had just learned to make soundly could
+    never reach it through the real path.
     """
     record: dict = {
         "capture_id": claim.capture_id,
@@ -109,6 +116,12 @@ def to_record(claim: AgentClaim) -> dict:
         record["monotonic_time"] = claim.monotonic_time
     if claim.tool is not None:
         record["tool"] = claim.tool
+
+    implied = (
+        TargetState.PRESENT if claim.target is not None else TargetState.UNKNOWN
+    )
+    if claim.target_state is not implied:
+        record["target_state"] = claim.target_state.value
     return record
 
 

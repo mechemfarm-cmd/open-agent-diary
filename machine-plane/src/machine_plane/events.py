@@ -155,6 +155,10 @@ class CoverageNote:
     recovered_at: float | None = None
     #: How many events were lost, if counted.
     lost: int | None = None
+    #: Which recorder reported this gap. ``None`` means the producer did not
+    #: say, which the single-recorder skeleton currently allows — Stage 1 must
+    #: treat that as a limitation rather than assume one recorder exists.
+    producer: str | None = None
 
     @property
     def scoped(self) -> bool:
@@ -165,6 +169,7 @@ class CoverageNote:
             "affected": list(self.affected),
             "recovered_at": self.recovered_at,
             "lost": self.lost,
+            "producer": self.producer,
         }
 
     @classmethod
@@ -175,7 +180,33 @@ class CoverageNote:
             affected=tuple(payload.get("affected") or ()),
             recovered_at=payload.get("recovered_at"),
             lost=payload.get("lost"),
+            producer=payload.get("producer"),
         )
+
+
+def target_is_consistent(target: str | None, state: "TargetState") -> bool:
+    """Whether a target and its state can both be true.
+
+    The legal matrix, in one place so the event, the claim and the adapter
+    cannot drift apart:
+
+    ``PRESENT``
+        a target is required.
+    ``ABSENT``
+        no target, and there genuinely was none.
+    ``REDACTED``
+        no target, because policy removed one.
+    ``UNKNOWN``
+        no target, and nobody recorded why.
+
+    ABSENT, REDACTED and UNKNOWN all carry no value. That is precisely why the
+    state exists, since ``None`` alone cannot tell them apart.
+
+    A state that carries a *transformed* value is deliberately not defined: if a
+    future producer needs one, it should be a distinct state rather than a
+    REDACTED that sometimes has a value.
+    """
+    return (target is not None) is (state is TargetState.PRESENT)
 
 
 def event_kind(event_type: EventType) -> EventKind:
@@ -250,14 +281,11 @@ class MachineEvent:
             raise ValueError(
                 f"{self.type.value} is an action event and requires a process identity"
             )
-        if self.target_state is TargetState.PRESENT and self.target is None:
+        if not target_is_consistent(self.target, self.target_state):
             raise ValueError(
-                "target_state is PRESENT but no target is recorded; use ABSENT, "
-                "REDACTED or UNKNOWN instead"
-            )
-        if self.target is not None and self.target_state is TargetState.UNKNOWN:
-            raise ValueError(
-                "a recorded target needs a target_state; do not leave it unknown"
+                f"target_state {self.target_state.value} contradicts the recorded "
+                f"target: PRESENT requires a target, and ABSENT, REDACTED and "
+                f"UNKNOWN all require none"
             )
 
     def content_violations(self) -> tuple[str, ...]:

@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 import itertools
+import secrets
 
 
 class SwitchState(str, Enum):
@@ -124,12 +125,21 @@ class Observation:
     scope: str | None = None
 
 
-def _counter_challenges() -> Callable[[], str]:
-    """Deterministic challenges, so tests stay readable.
+def _random_challenges() -> Callable[[], str]:
+    """Unpredictable challenges, so a genuine report cannot be replayed.
 
-    A real component must draw these from an unpredictable source. This model
-    cannot tell the difference — which is exactly why the factory is injectable
-    and why this docstring says so rather than implying the default is secure.
+    This is the default. A default that is only safe when someone remembers to
+    replace it is not a safe default, and a future privileged caller is exactly
+    the caller least likely to notice.
+    """
+    return lambda: secrets.token_hex(16)
+
+
+def counter_challenges() -> Callable[[], str]:
+    """Deterministic challenges, for tests that want to read them.
+
+    Not the default. Kept so a test can name a challenge literally, which is
+    clearer than asserting against a random value.
     """
     counter = itertools.count(1)
     return lambda: f"challenge-{next(counter)}"
@@ -243,8 +253,9 @@ class KillSwitch:
         #: outside the scope, so it can only refuse the ones it knows are not.
         self.observers = tuple(observers)
         self.lease = lease
-        self._challenge_factory = challenge_factory or _counter_challenges()
+        self._challenge_factory = challenge_factory or _random_challenges()
         self._challenge: str | None = None
+        self._verified_challenge: str | None = None
         self._state = SwitchState.RUNNING
         self._records: list[SwitchRecord] = []
         self._observations: list[Observation] = []
@@ -280,6 +291,22 @@ class KillSwitch:
         """A switch nobody has ever verified is a decoration."""
         return self._verified_state is not None
 
+    @property
+    def current_state_verified(self) -> bool:
+        """Whether the state the switch is in *now* has been observed externally.
+
+        Bound to the latest transition rather than being a lifetime flag: any
+        new request or controller-loss transition clears it, because proof that
+        the switch was once paused is not proof that it is stopped.
+        """
+        return self._verified_state is not None and self._verified_state is self._state
+
+    def _expected_state_for(self, challenge: str | None) -> SwitchState | None:
+        for record in reversed(self._records):
+            if record.challenge == challenge:
+                return record.plan.to_state
+        return None
+
     def controller_lost(self, *, last_seen: float, now: float) -> bool:
         """Whether the lease says the controller has gone quiet.
 
@@ -311,6 +338,10 @@ class KillSwitch:
         """
         target = self.predicted_state_on_controller_loss()
         self._state = target
+        # The transition invalidates any earlier proof: the switch is in a state
+        # nobody has observed.
+        self._verified_state = None
+        self._verified_challenge = None
         self._losses.append(ControllerLoss(at=at, resulting_state=target))
         return target
 
@@ -360,6 +391,10 @@ class KillSwitch:
         )
         self._challenge = self._records[-1].challenge
         self._state = plan.to_state
+        # Proof of the state we just left says nothing about the state we are in
+        # now, so it does not survive the transition.
+        self._verified_state = None
+        self._verified_challenge = None
         return plan
 
     def record_observation(self, observation: Observation) -> bool:
@@ -372,11 +407,15 @@ class KillSwitch:
         - it quotes the challenge issued with the request it answers, so a real
           observation of an earlier state cannot be replayed as proof of a later
           one;
+        - it reports the state that request was supposed to produce — the
+          challenge identifies *which* transition is being checked, and the
+          report has to be about that transition, not merely about the switch;
         - it names the scope that was actually observed;
         - it does not predate the request it answers.
 
-        Everything else — a self-report, an unbound report, or a test calling
-        this directly — is recorded but does not mark the switch proven.
+        Everything else — a self-report, an unbound report, a report of some
+        other state, or a test calling this directly — is recorded but does not
+        mark the switch proven.
 
         This is still not a verification mechanism, and does not pretend to be
         one. The package cannot establish that an observer is genuinely outside
@@ -398,6 +437,10 @@ class KillSwitch:
             return False
         if self._records and observation.at < self._records[-1].at:
             return False
+        expected = self._expected_state_for(observation.challenge)
+        if expected is None or observation.observed_state is not expected:
+            return False
 
         self._verified_state = observation.observed_state
+        self._verified_challenge = observation.challenge
         return True

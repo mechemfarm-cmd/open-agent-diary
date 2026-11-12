@@ -45,6 +45,7 @@ from .events import (
     EventType,
     MachineEvent,
     TargetState,
+    target_is_consistent,
 )
 from .privacy import PrivacyPolicy, coarsen_destination
 
@@ -53,6 +54,7 @@ class CorrelationStatus(str, Enum):
     CONFIRMED_MATCH = "confirmed_match"
     AMBIGUOUS_MATCH = "ambiguous_match"
     DELAYED_MATCH = "delayed_match"
+    MATCH_NOT_PROVABLE = "match_not_provable"
     MACHINE_ONLY = "machine_only"
     AGENT_ONLY = "agent_only"
     UNMATCHED_DUE_TO_SCOPE = "unmatched_due_to_scope"
@@ -123,6 +125,18 @@ class AgentClaim:
     #: Why the target is what it is. Defaults to UNKNOWN, because a claim that
     #: simply does not mention a target has not told us there wasn't one.
     target_state: TargetState = TargetState.UNKNOWN
+
+    def __post_init__(self) -> None:
+        # The same invariant the event enforces. A claim is not exempt just
+        # because it came from the agent's side of the comparison: a claim
+        # asserting ABSENT while carrying a path would agree with an absent
+        # event without its target ever being looked at.
+        if not target_is_consistent(self.target, self.target_state):
+            raise ValueError(
+                f"target_state {self.target_state.value} contradicts the claim's "
+                f"target: PRESENT requires a target, and ABSENT, REDACTED and "
+                f"UNKNOWN all require none"
+            )
 
 
 @dataclass(frozen=True)
@@ -386,6 +400,34 @@ class CorrelationReport:
         }
 
 
+def _coverage_objection(
+    coverage: CoverageMap, claim: AgentClaim, event: MachineEvent
+) -> str | None:
+    """Why a matched pair cannot be confirmed, or ``None`` if it can.
+
+    A gap is not only the reason an unmatched claim is unexplained; it limits
+    what *any* comparison inside it can prove. A match found in an interval the
+    recorder could not see is a match nobody observed, and reporting it as
+    confirmed would place the coverage model's own caveats behind the result
+    instead of in front of it.
+
+    This is checked on both times because either side can fall in the unreliable
+    interval, and a confirmation needs both halves to be sound.
+    """
+    subject = event.type.value
+    if not coverage.recorder_running_at(claim.wall_time):
+        return "recorder_not_running"
+    if coverage.clock_unreliable_at(claim.wall_time) or coverage.clock_unreliable_at(
+        event.wall_time
+    ):
+        return "wall_clock_unreliable_at_match_time"
+    if coverage.is_blind(claim.wall_time, affected=subject):
+        return "recorder_blind_at_claim_time"
+    if coverage.is_blind(event.wall_time, affected=subject):
+        return "recorder_blind_at_effect_time"
+    return None
+
+
 def _claim_subject(claim: AgentClaim) -> str | None:
     """What an event-type name for this claim's action, for scoped coverage."""
     event_type = ACTION_ALIASES.get(claim.action.lower())
@@ -497,7 +539,20 @@ def correlate(
             index, claim = agreed[0]
             used_claims.add(index)
             registration = registry.get(claim.capture_id)
-            if registration is not None and not registration.covers(event.wall_time):
+            objection = _coverage_objection(coverage, claim, event)
+            if objection is not None:
+                # Matched, but the interval cannot support a confirmation. The
+                # pair is reported rather than silently promoted: the agreement
+                # is real, and so is the reason it proves nothing.
+                records.append(
+                    CorrelatedRecord(
+                        status=CorrelationStatus.MATCH_NOT_PROVABLE,
+                        reason=objection,
+                        event=event,
+                        claim=claim,
+                    )
+                )
+            elif registration is not None and not registration.covers(event.wall_time):
                 records.append(
                     CorrelatedRecord(
                         status=CorrelationStatus.DELAYED_MATCH,

@@ -95,7 +95,10 @@ class FindingOneUnknownTargetTest(unittest.TestCase):
         """Absence can still match — when both sides say so rather than imply it."""
         policy = _policy()
         events = _events(
-            [action_event(EventType.WRITE_ATTEMPT, target=None, wall_time=WALL)],
+            [
+                gap_event(EventType.RECORDER_STARTED, wall_time=WALL - 100),
+                action_event(EventType.WRITE_ATTEMPT, target=None, wall_time=WALL),
+            ],
             policy,
         )
         claims = [make_claim("write", target=None, wall_time=WALL)]
@@ -276,6 +279,233 @@ class FindingFourScopedCoverageTest(unittest.TestCase):
         report = correlate(events, claims, _registry(), policy=policy)
 
         self.assertEqual(report.records[0].status, CorrelationStatus.AGENT_ONLY)
+
+
+class FollowUpInvariantTest(unittest.TestCase):
+    """Follow-up finding 1: the state and the value cannot contradict."""
+
+    def test_an_event_cannot_carry_a_target_and_claim_absence(self) -> None:
+        from machine_plane.events import MachineEvent
+
+        with self.assertRaises(ValueError):
+            MachineEvent(
+                type=EventType.WRITE_ATTEMPT,
+                producer="mock",
+                producer_version="0.1.0",
+                platform="linux",
+                monotonic_time=1.0,
+                wall_time=WALL,
+                target="/etc/shadow",
+                target_state=TargetState.ABSENT,
+            )
+
+    def test_a_claim_cannot_carry_a_target_and_claim_absence(self) -> None:
+        from machine_plane.correlation import AgentClaim
+
+        with self.assertRaises(ValueError):
+            AgentClaim(
+                capture_id="run-1",
+                action="write",
+                wall_time=WALL,
+                target="/home/x/work/report.txt",
+                target_state=TargetState.ABSENT,
+            )
+
+    def test_a_claim_cannot_claim_presence_without_a_target(self) -> None:
+        from machine_plane.correlation import AgentClaim
+
+        with self.assertRaises(ValueError):
+            AgentClaim(
+                capture_id="run-1",
+                action="write",
+                wall_time=WALL,
+                target=None,
+                target_state=TargetState.PRESENT,
+            )
+
+    def test_redacted_carries_no_value(self) -> None:
+        """The decision, enforced: REDACTED means the value was removed.
+
+        A state that carried a *transformed* value would be a different state,
+        not a REDACTED that sometimes has one.
+        """
+        from machine_plane.correlation import AgentClaim
+
+        with self.assertRaises(ValueError):
+            AgentClaim(
+                capture_id="run-1",
+                action="write",
+                wall_time=WALL,
+                target="/home/x/work/report.txt",
+                target_state=TargetState.REDACTED,
+            )
+
+
+class FollowUpExportRoundTripTest(unittest.TestCase):
+    """Follow-up finding 2: the state must survive the neutral boundary."""
+
+    def _round_trip(self, claim):
+        from machine_plane.claims import adapt_record
+        from machine_plane.export import to_record
+
+        restored, problem, _ = adapt_record(to_record(claim), line_number=1)
+        self.assertIsNone(problem)
+        return restored
+
+    def test_present_survives_the_round_trip(self) -> None:
+        claim = make_claim("write", target="/home/x/work/report.txt")
+        self.assertIs(
+            self._round_trip(claim).target_state, TargetState.PRESENT
+        )
+
+    def test_absent_survives_the_round_trip(self) -> None:
+        """The case that used to come back as UNKNOWN."""
+        claim = make_claim("write", target=None, target_state=TargetState.ABSENT)
+        self.assertIs(self._round_trip(claim).target_state, TargetState.ABSENT)
+
+    def test_redacted_survives_the_round_trip(self) -> None:
+        claim = make_claim("write", target=None, target_state=TargetState.REDACTED)
+        self.assertIs(self._round_trip(claim).target_state, TargetState.REDACTED)
+
+    def test_unknown_survives_the_round_trip(self) -> None:
+        claim = make_claim("write", target=None, target_state=TargetState.UNKNOWN)
+        self.assertIs(self._round_trip(claim).target_state, TargetState.UNKNOWN)
+
+    def test_a_contradictory_record_is_reported_not_adapted(self) -> None:
+        from machine_plane.claims import adapt_record
+
+        payload = {
+            "capture_id": "run-1",
+            "action": "write",
+            "wall_time": WALL,
+            "target": "/home/x/work/report.txt",
+            "target_state": "absent",
+        }
+        claim, problem, _ = adapt_record(payload, line_number=1)
+
+        self.assertIsNone(claim)
+        self.assertIsNotNone(problem)
+        self.assertEqual(problem.reason, "target_state_contradicts_target")
+
+    def test_an_absent_claim_still_correlates_after_the_round_trip(self) -> None:
+        """The point of the fix: the sound agreement reaches the core."""
+        from machine_plane.claims import adapt_record
+        from machine_plane.export import to_record
+
+        policy = _policy()
+        events = _events(
+            [
+                gap_event(EventType.RECORDER_STARTED, wall_time=WALL - 100),
+                action_event(EventType.WRITE_ATTEMPT, target=None, wall_time=WALL),
+            ],
+            policy,
+        )
+        claim, _, _ = adapt_record(
+            to_record(
+                make_claim("write", target=None, target_state=TargetState.ABSENT)
+            ),
+            line_number=1,
+        )
+
+        report = correlate(events, [claim], _registry(), policy=policy)
+
+        self.assertEqual(report.records[0].status, CorrelationStatus.CONFIRMED_MATCH)
+
+
+class FollowUpMatchCoverageTest(unittest.TestCase):
+    """Follow-up finding 3: coverage limits what a *match* can prove."""
+
+    def _matched(self, extra_raws, *, claim_action="write", claim_target="/home/x/work/report.txt"):
+        policy = _policy()
+        events = _events(
+            [
+                gap_event(EventType.RECORDER_STARTED, wall_time=WALL - 100),
+                *extra_raws,
+                action_event(
+                    EventType.WRITE_ATTEMPT, target=claim_target, wall_time=WALL
+                ),
+            ],
+            policy,
+        )
+        claims = [make_claim(claim_action, target=claim_target, wall_time=WALL)]
+        return correlate(events, claims, _registry(), policy=policy)
+
+    def test_a_match_inside_a_clock_unreliable_window_is_not_confirmed(self) -> None:
+        report = self._matched(
+            [gap_event(EventType.CLOCK_JUMP, wall_time=WALL - 5)]
+        )
+        self.assertEqual(
+            report.records[0].status, CorrelationStatus.MATCH_NOT_PROVABLE
+        )
+        self.assertEqual(report.records[0].reason, "wall_clock_unreliable_at_match_time")
+
+    def test_a_match_inside_a_scoped_gap_is_not_confirmed(self) -> None:
+        report = self._matched(
+            [
+                gap_event(
+                    EventType.BUFFER_OVERFLOW,
+                    wall_time=WALL - 5,
+                    affected=("write_attempt",),
+                )
+            ]
+        )
+        self.assertEqual(
+            report.records[0].status, CorrelationStatus.MATCH_NOT_PROVABLE
+        )
+        self.assertEqual(report.records[0].reason, "recorder_blind_at_claim_time")
+
+    def test_a_match_inside_an_unscoped_gap_is_not_confirmed(self) -> None:
+        report = self._matched([gap_event(EventType.BUFFER_OVERFLOW, wall_time=WALL - 5)])
+        self.assertEqual(
+            report.records[0].status, CorrelationStatus.MATCH_NOT_PROVABLE
+        )
+
+    def test_a_match_before_the_recorder_started_is_not_confirmed(self) -> None:
+        policy = _policy()
+        events = _events(
+            [
+                gap_event(EventType.RECORDER_STARTED, wall_time=WALL + 100),
+                action_event(
+                    EventType.WRITE_ATTEMPT,
+                    target="/home/x/work/report.txt",
+                    wall_time=WALL,
+                ),
+            ],
+            policy,
+        )
+        claims = [make_claim("write", target="/home/x/work/report.txt", wall_time=WALL)]
+
+        report = correlate(events, claims, _registry(), policy=policy)
+
+        self.assertEqual(
+            report.records[0].status, CorrelationStatus.MATCH_NOT_PROVABLE
+        )
+        self.assertEqual(report.records[0].reason, "recorder_not_running")
+
+    def test_a_scoped_gap_does_not_block_an_unrelated_match(self) -> None:
+        """The payoff: a narrow gap must not un-prove an unrelated match."""
+        report = self._matched(
+            [
+                gap_event(
+                    EventType.BUFFER_OVERFLOW,
+                    wall_time=WALL - 5,
+                    affected=("exec",),
+                )
+            ]
+        )
+        self.assertEqual(report.records[0].status, CorrelationStatus.CONFIRMED_MATCH)
+
+    def test_a_match_outside_the_gap_window_is_still_confirmed(self) -> None:
+        report = self._matched(
+            [
+                gap_event(
+                    EventType.BUFFER_OVERFLOW,
+                    wall_time=WALL - 50,
+                    recovered_at=WALL - 20,
+                )
+            ]
+        )
+        self.assertEqual(report.records[0].status, CorrelationStatus.CONFIRMED_MATCH)
 
 
 class PublicSurfaceTest(unittest.TestCase):

@@ -32,6 +32,19 @@ def _events(raws, policy=None):
     return list(MockProducer(raws, policy=policy).events())
 
 
+def _running(raws, policy=None):
+    """Events with the recorder declared running.
+
+    A confirmation now needs both halves to be sound, and the coverage model
+    already treated everything before the first ``recorder_started`` as blind. So
+    a fixture that expects a confirmed match has to say the recorder was running
+    — otherwise it is asserting a match nobody observed.
+    """
+    return _events(
+        [gap_event(EventType.RECORDER_STARTED, wall_time=WALL - 100), *raws], policy
+    )
+
+
 def _policy() -> PrivacyPolicy:
     return PrivacyPolicy(
         allowed_roots=("/home/x/work",), path_display=PathDisplay.BASENAME
@@ -45,7 +58,7 @@ def _registry(*registrations) -> RunRegistry:
 class ConfirmedMatchTest(unittest.TestCase):
     def test_identity_action_and_target_agreeing_is_a_confirmed_match(self) -> None:
         policy = _policy()
-        events = _events(
+        events = _running(
             [
                 action_event(
                     EventType.WRITE_ATTEMPT,
@@ -53,7 +66,7 @@ class ConfirmedMatchTest(unittest.TestCase):
                     wall_time=WALL,
                 )
             ],
-            policy,
+            policy=policy,
         )
         claims = [make_claim("write", target="/home/x/work/report.txt", wall_time=WALL)]
 
@@ -67,7 +80,7 @@ class ConfirmedMatchTest(unittest.TestCase):
     def test_the_claim_target_is_redacted_before_comparison(self) -> None:
         """Both sides get identical treatment, not one redacted against one raw."""
         policy = _policy()
-        events = _events(
+        events = _running(
             [
                 action_event(
                     EventType.WRITE_ATTEMPT,
@@ -75,7 +88,7 @@ class ConfirmedMatchTest(unittest.TestCase):
                     wall_time=WALL,
                 )
             ],
-            policy,
+            policy=policy,
         )
         # The claim carries the real path; the event carries the basename.
         claims = [make_claim("write", target="/home/x/work/report.txt", wall_time=WALL)]
@@ -272,7 +285,7 @@ class ScopeAndDelayTest(unittest.TestCase):
 
     def test_an_effect_after_the_run_closed_is_delayed(self) -> None:
         policy = _policy()
-        events = _events(
+        events = _running(
             [
                 action_event(
                     EventType.WRITE_ATTEMPT,
@@ -280,7 +293,7 @@ class ScopeAndDelayTest(unittest.TestCase):
                     wall_time=WALL + 500,
                 )
             ],
-            policy,
+            policy=policy,
         )
         registry = RunRegistry(
             [make_registration(started_at=0.0, ended_at=WALL + 10)]
@@ -344,7 +357,7 @@ class CoverageTest(unittest.TestCase):
 class ReportTest(unittest.TestCase):
     def test_exceptions_exclude_only_confirmed_matches(self) -> None:
         policy = _policy()
-        events = _events(
+        events = _running(
             [
                 action_event(
                     EventType.WRITE_ATTEMPT,
@@ -357,7 +370,7 @@ class ReportTest(unittest.TestCase):
                     wall_time=WALL,
                 ),
             ],
-            policy,
+            policy=policy,
         )
         claims = [make_claim("write", target="/home/x/work/report.txt", wall_time=WALL)]
 
