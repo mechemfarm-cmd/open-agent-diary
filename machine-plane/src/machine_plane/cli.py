@@ -21,7 +21,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .correlation import CorrelationStatus, RunRegistry, correlate
+from .correlation import (
+    CorrelationStatus,
+    CoverageMap,
+    RunRegistry,
+    correlate,
+)
 from .events import GAP_EVENT_TYPES, EventType
 from .importer import Importer, MemoryStore
 from .privacy import PathDisplay, PrivacyPolicy
@@ -34,6 +39,7 @@ from .testing import (
     make_claim,
     make_registration,
 )
+from .view import build_view
 
 WALL = 1_700_000_000.0
 
@@ -157,12 +163,24 @@ def _run_correlate(policy: PrivacyPolicy) -> int:
     return 0
 
 
+def _run_view(policy: PrivacyPolicy) -> int:
+    events = list(MockProducer(_correlate_events(), policy=policy).events())
+    registry = RunRegistry([make_registration()])
+    report = correlate(events, _correlate_claims(), registry, policy=policy)
+
+    print(build_view(report, coverage=CoverageMap.from_events(events)).to_text())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="machine-plane")
     parser.add_argument(
         "command",
-        choices=["demo", "correlate"],
-        help="demo: pipeline and importer; correlate: join the two accounts",
+        choices=["demo", "correlate", "view"],
+        help=(
+            "demo: pipeline and importer; correlate: join the two accounts; "
+            "view: the ranked exception page"
+        ),
     )
     parser.add_argument(
         "--allowed-root",
@@ -184,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "correlate":
         return _run_correlate(policy)
+    if args.command == "view":
+        return _run_view(policy)
     return _run_demo(policy)
 
 

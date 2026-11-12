@@ -61,6 +61,7 @@ from .privacy import (
 )
 from .producer import Producer, RawEvent, Sink
 from .spool import SPOOL_VERSION, Spool, SpoolEnvelope, SpoolError
+from .view import RANKING, View, ViewEntry, build_view, describe
 
 __all__ = [
     "ACTION_ALIASES",
@@ -112,8 +113,13 @@ __all__ = [
     "Spool",
     "SpoolEnvelope",
     "SpoolError",
+    "RANKING",
     "Store",
+    "View",
+    "ViewEntry",
+    "build_view",
     "correlate",
+    "describe",
     "event_kind",
 ]
 

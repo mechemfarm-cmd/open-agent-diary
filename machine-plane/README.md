@@ -22,7 +22,8 @@ What exists:
 - the producer pipeline;
 - the protected spool and the unprivileged importer;
 - correlation, joining machine records to agent claims by identity;
-- the hash chain and checkpoint verification.
+- the hash chain and checkpoint verification;
+- the view: ranked exceptions, each in one plain sentence.
 
 What does not exist:
 
@@ -31,7 +32,8 @@ What does not exist:
   defined (`AgentClaim`), but nothing reads the Diary yet;
 - checkpoint storage off-box, without which the chain proves less than it
   appears to;
-- the view, and the kill switch.
+- the kill switch;
+- any UI beyond the text page.
 
 This package is deliberately the part that is the same everywhere. The sensor is
 not, and cannot be: it is a per-platform problem, and no sensor has been chosen.
@@ -51,6 +53,7 @@ machine-plane/
     importer.py      the unprivileged importer
     correlation.py   joining the agent's account to the machine's
     chain.py         tamper evidence, and the limit of it
+    view.py          ranked exceptions, in plain language
     testing.py       test doubles so a producer can be built without a kernel
     cli.py           demos, so the system is observable without a sensor
   tests/
@@ -75,6 +78,12 @@ by category:
 
 ```bash
 PYTHONPATH=src python3 -m machine_plane.cli correlate --allowed-root /home/x/work
+```
+
+The third renders that as the page a person would actually read:
+
+```bash
+PYTHONPATH=src python3 -m machine_plane.cli view --allowed-root /home/x/work
 ```
 
 ## Decisions worth knowing
