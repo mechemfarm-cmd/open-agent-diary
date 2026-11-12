@@ -29,6 +29,7 @@ from .checkpoints import (
     publish,
 )
 from .claims import adapt_file
+from .export import validate_file, write_claims
 from .correlation import (
     CorrelationStatus,
     CoverageMap,
@@ -213,6 +214,23 @@ def _run_integrity(policy: PrivacyPolicy) -> int:
     return 0
 
 
+def _run_export(export_in: str | None, out: str | None) -> int:
+    if not export_in or not out:
+        print("export needs --export IN and --out OUT")
+        return 2
+
+    adapted = adapt_file(export_in)
+    summary = write_claims(adapted.claims, out)
+    validation = validate_file(out)
+
+    print(f"read from  : {export_in}")
+    print(f"adapted    : {adapted.adapted} (skipped {adapted.skipped})")
+    print(f"written to : {summary.path}")
+    print(f"records    : {summary.written}")
+    print(f"validates  : {validation.ok}")
+    return 0
+
+
 def _run_adapt(export: str | None) -> int:
     if not export:
         print("adapt needs --export PATH")
@@ -238,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="machine-plane")
     parser.add_argument(
         "command",
-        choices=["demo", "correlate", "view", "adapt", "integrity"],
+        choices=["demo", "correlate", "view", "adapt", "export", "integrity"],
         help=(
             "demo: pipeline and importer; correlate: join the two accounts; "
             "view: the ranked exception page; adapt: read an exported work "
@@ -248,7 +266,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--export",
         default=None,
-        help="path to an exported work trace (JSON lines) for the adapt command",
+        help="path to an exported work trace (JSON lines) for adapt or export",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="path to write an export file to, for the export command",
     )
     parser.add_argument(
         "--allowed-root",
@@ -274,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_view(policy)
     if args.command == "adapt":
         return _run_adapt(args.export)
+    if args.command == "export":
+        return _run_export(args.export, args.out)
     if args.command == "integrity":
         return _run_integrity(policy)
     return _run_demo(policy)

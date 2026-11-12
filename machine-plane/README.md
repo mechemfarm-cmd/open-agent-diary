@@ -23,6 +23,7 @@ What exists:
 - the protected spool and the unprivileged importer;
 - correlation, joining machine records to agent claims by identity;
 - the adapter from an exported work trace to agent claims;
+- the export format: a writer and a validator for it;
 - the hash chain and checkpoint verification;
 - off-box checkpoint publication, with the trust domain made explicit;
 - the kill switch's authority, state and fail-direction model;
@@ -31,8 +32,8 @@ What exists:
 What does not exist:
 
 - any platform producer (Linux, Windows or macOS);
-- an exporter — something has to write the work trace out, and that lives
-  outside this package by design;
+- a source that reads a real work trace and writes it out — that piece belongs
+  outside this package, on the far side of an export someone chose to run;
 - a privileged component to actually carry out a switch action — the model
   decides what should happen, nothing here executes it;
 - any UI beyond the text page.
@@ -55,6 +56,7 @@ machine-plane/
     importer.py      the unprivileged importer
     correlation.py   joining the agent's account to the machine's
     claims.py        adapting an exported work trace into claims
+    export.py        writing and validating the neutral export format
     chain.py         tamper evidence, and the limit of it
     checkpoints.py   where a checkpoint is worth anything, and where it is not
     killswitch.py    the switch as an architecture: authority, fail direction
@@ -98,7 +100,14 @@ adapt:
 PYTHONPATH=src python3 -m machine_plane.cli adapt --export /path/to/work-trace.jsonl
 ```
 
-The fifth shows what a checkpoint is worth depending on where it lives:
+The fifth writes an export and validates the result, which is the loop a real
+user takes:
+
+```bash
+PYTHONPATH=src python3 -m machine_plane.cli export --export in.jsonl --out out.jsonl
+```
+
+The sixth shows what a checkpoint is worth depending on where it lives:
 
 ```bash
 PYTHONPATH=src python3 -m machine_plane.cli integrity
@@ -217,6 +226,20 @@ logged, and a switch is not `proven` until someone has observed it from outside.
 **The switch model executes nothing.** It decides authority, state and plans; the
 privileged component that issues real commands is separate work. A test asserts
 the module never grows a `subprocess` import.
+
+**The export format is three required fields and three optional ones.** Every
+field not written is a field that cannot leak. Empty optional fields are omitted
+rather than written as nulls, so a reader cannot mistake "no target recorded" for
+"target recorded as nothing". The validator reports unknown fields rather than
+rejecting them — a validator that refuses a producer's own fields would simply be
+bypassed.
+
+**The exporter cannot read a Diary either.** It writes already-neutral records
+and validates files someone else produced; it knows no database. The piece that
+opens a real store belongs outside, on the far side of an export step someone
+chose to run. That is what lets this package be installed without granting it
+access to anyone's memory, and a test asserts the forbidden names never appear
+in its source.
 
 **Nothing is dropped silently, on either side.** A record the adapter cannot use
 is reported with its line number and a reason. Skipping it quietly would make an
