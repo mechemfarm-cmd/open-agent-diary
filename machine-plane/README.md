@@ -21,14 +21,17 @@ What exists:
 - producer-side redaction;
 - the producer pipeline;
 - the protected spool and the unprivileged importer;
-- correlation, joining machine records to agent claims by identity.
+- correlation, joining machine records to agent claims by identity;
+- the hash chain and checkpoint verification.
 
 What does not exist:
 
 - any platform producer (Linux, Windows or macOS);
 - an adapter from Agent Diary work traces to agent claims — the shape is
   defined (`AgentClaim`), but nothing reads the Diary yet;
-- the hash chain, the view, and the kill switch.
+- checkpoint storage off-box, without which the chain proves less than it
+  appears to;
+- the view, and the kill switch.
 
 This package is deliberately the part that is the same everywhere. The sensor is
 not, and cannot be: it is a per-platform problem, and no sensor has been chosen.
@@ -47,6 +50,7 @@ machine-plane/
     spool.py         the protected, append-only ingestion boundary
     importer.py      the unprivileged importer
     correlation.py   joining the agent's account to the machine's
+    chain.py         tamper evidence, and the limit of it
     testing.py       test doubles so a producer can be built without a kernel
     cli.py           demos, so the system is observable without a sensor
   tests/
@@ -134,6 +138,18 @@ about what kind of problem you have.
 dropped, every claim of that action type is equally incomparable to it, so
 consuming them would let one un-attributable event absorb unrelated claims. Both
 sides are reported and the reason codes explain why.
+
+**A hash chain answers two different questions, and only one of them locally.**
+`verify(chain)` detects modification or reordering of the links that survive.
+It cannot detect that an earlier segment was *deleted*, because a valid prefix
+of a valid chain is itself a valid chain — there is a test asserting exactly
+that, next to one asserting the same prefix fails against a checkpoint. Off-box
+checkpoints are therefore required before the words *evidence*, *integrity* or
+*flight recorder* are used, and the code refuses to blur them together.
+
+**The chain stores event ids, not event bodies.** That is sufficient, because an
+event id is content-derived: altering an event changes its id, which breaks the
+chain.
 
 ## Dependencies
 

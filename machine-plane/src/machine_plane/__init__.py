@@ -10,6 +10,16 @@ Diary database. Platform sensors live in separate producer packages.
 """
 
 from .capabilities import Capability, CapabilityReport, CapabilitySet
+from .chain import (
+    CHAIN_VERSION,
+    GENESIS,
+    ChainLink,
+    Checkpoint,
+    HashChain,
+    IntegrityStatus,
+    VerifyResult,
+    verify,
+)
 from .correlation import (
     ACTION_ALIASES,
     INVESTIGABLE,
@@ -56,9 +66,17 @@ __all__ = [
     "ACTION_ALIASES",
     "ACTION_EVENT_TYPES",
     "AgentClaim",
+    "CHAIN_VERSION",
     "Capability",
     "CapabilityReport",
     "CapabilitySet",
+    "ChainLink",
+    "Checkpoint",
+    "GENESIS",
+    "HashChain",
+    "IntegrityStatus",
+    "VerifyResult",
+    "verify",
     "CorrelatedRecord",
     "CorrelationReport",
     "CorrelationStatus",
