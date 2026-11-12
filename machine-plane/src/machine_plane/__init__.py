@@ -20,6 +20,14 @@ from .chain import (
     VerifyResult,
     verify,
 )
+from .claims import (
+    TOOL_ACTIONS,
+    AdaptProblem,
+    AdaptResult,
+    adapt_file,
+    adapt_jsonl,
+    adapt_record,
+)
 from .correlation import (
     ACTION_ALIASES,
     INVESTIGABLE,
@@ -66,8 +74,14 @@ from .view import RANKING, View, ViewEntry, build_view, describe
 __all__ = [
     "ACTION_ALIASES",
     "ACTION_EVENT_TYPES",
+    "AdaptProblem",
+    "AdaptResult",
     "AgentClaim",
     "CHAIN_VERSION",
+    "TOOL_ACTIONS",
+    "adapt_file",
+    "adapt_jsonl",
+    "adapt_record",
     "Capability",
     "CapabilityReport",
     "CapabilitySet",

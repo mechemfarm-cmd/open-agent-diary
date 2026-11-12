@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .claims import adapt_file
 from .correlation import (
     CorrelationStatus,
     CoverageMap,
@@ -172,15 +173,41 @@ def _run_view(policy: PrivacyPolicy) -> int:
     return 0
 
 
+def _run_adapt(export: str | None) -> int:
+    if not export:
+        print("adapt needs --export PATH")
+        return 2
+
+    result = adapt_file(export)
+    print(f"read    : {result.read}")
+    print(f"adapted : {result.adapted}")
+    print(f"skipped : {result.skipped}")
+    if result.used_default_capture_id:
+        print(
+            "attributed to a default run: "
+            f"{result.used_default_capture_id} (an assumption, not a fact)"
+        )
+    for problem in result.problems[:20]:
+        print(f"  line {problem.line_number}: {problem.reason}")
+    if len(result.problems) > 20:
+        print(f"  ... and {len(result.problems) - 20} more")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="machine-plane")
     parser.add_argument(
         "command",
-        choices=["demo", "correlate", "view"],
+        choices=["demo", "correlate", "view", "adapt"],
         help=(
             "demo: pipeline and importer; correlate: join the two accounts; "
-            "view: the ranked exception page"
+            "view: the ranked exception page; adapt: read an exported work trace"
         ),
+    )
+    parser.add_argument(
+        "--export",
+        default=None,
+        help="path to an exported work trace (JSON lines) for the adapt command",
     )
     parser.add_argument(
         "--allowed-root",
@@ -204,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_correlate(policy)
     if args.command == "view":
         return _run_view(policy)
+    if args.command == "adapt":
+        return _run_adapt(args.export)
     return _run_demo(policy)
 
 

@@ -22,14 +22,15 @@ What exists:
 - the producer pipeline;
 - the protected spool and the unprivileged importer;
 - correlation, joining machine records to agent claims by identity;
+- the adapter from an exported work trace to agent claims;
 - the hash chain and checkpoint verification;
 - the view: ranked exceptions, each in one plain sentence.
 
 What does not exist:
 
 - any platform producer (Linux, Windows or macOS);
-- an adapter from Agent Diary work traces to agent claims — the shape is
-  defined (`AgentClaim`), but nothing reads the Diary yet;
+- an exporter — something has to write the work trace out, and that lives
+  outside this package by design;
 - checkpoint storage off-box, without which the chain proves less than it
   appears to;
 - the kill switch;
@@ -52,6 +53,7 @@ machine-plane/
     spool.py         the protected, append-only ingestion boundary
     importer.py      the unprivileged importer
     correlation.py   joining the agent's account to the machine's
+    claims.py        adapting an exported work trace into claims
     chain.py         tamper evidence, and the limit of it
     view.py          ranked exceptions, in plain language
     testing.py       test doubles so a producer can be built without a kernel
@@ -84,6 +86,13 @@ The third renders that as the page a person would actually read:
 
 ```bash
 PYTHONPATH=src python3 -m machine_plane.cli view --allowed-root /home/x/work
+```
+
+The fourth reads an exported work trace and reports what it could and could not
+adapt:
+
+```bash
+PYTHONPATH=src python3 -m machine_plane.cli adapt --export /path/to/work-trace.jsonl
 ```
 
 ## Decisions worth knowing
@@ -159,6 +168,18 @@ checkpoints are therefore required before the words *evidence*, *integrity* or
 **The chain stores event ids, not event bodies.** That is sufficient, because an
 event id is content-derived: altering an event changes its id, which breaks the
 chain.
+
+**The adapter cannot reach a database, and that is enforced by its shape.** It
+opens one kind of thing — a text file of JSON lines. It imports no database
+driver, knows where no Diary lives, and cannot be pointed at one. Whoever runs
+the export decides what leaves their machine. A test reads the module's source
+and asserts the forbidden names never appear, so the boundary survives future
+edits.
+
+**Nothing is dropped silently, on either side.** A record the adapter cannot use
+is reported with its line number and a reason. Skipping it quietly would make an
+unadaptable claim indistinguishable from a claim that never existed — the same
+failure the gap events exist to prevent on the machine side.
 
 ## Dependencies
 
