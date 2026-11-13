@@ -30,8 +30,14 @@ Recorded in `machine-plane-stage0-probes.md`; not repeated here.
 ## What this stage would do
 
 Attach read-only `bpftrace` probes to **Emily only**, for two bounded sessions,
-and compare what the kernel reports against what Hermes already records about
-itself.
+and compare what the kernel reports against an **independent action manifest** —
+a list of actions the scripted workload intends to perform. Agent Diary is not
+read, exported or touched at all in this stage.
+
+**The executable form of this proposal is `stage1/run-sheet.md`**, together with
+`stage1/probes/*.bt`, `stage1/action-manifest.json` and `stage1/workload.sh`.
+Where the two documents differ, the run sheet is authoritative: it holds the
+exact commands and is the thing that must be reviewed before attach.
 
 Emily is chosen because it is the busiest host and the one with the worst-case
 open rate. If the approach cannot cope with Emily, it will not cope anywhere.
@@ -96,7 +102,8 @@ These are conditions of running the stage, not aspirations.
 - **Metadata only.** No file contents, no command-line arguments containing
   secrets, no environment captures, no packet payloads.
 - **No Agent Diary.** Nothing in this stage is ingested into anyone's memory.
-  The core's importer is not used.
+  The core's importer is not used, and no Diary file is read. The comparison
+  baseline is the action manifest, not a diary export.
 - **Explicit markers.** Each session opens with a start marker and closes with a
   stop marker, so a gap is distinguishable from silence.
 - **Removal is one step.** The probe is killed and the output directory deleted.
@@ -142,3 +149,7 @@ produce a yes.
 
 Approval from Alice as a bounded review, and from Bill for the host and the
 window. Neither is implied by the core approval at `3cbf14a`.
+
+The run sheet at `stage1/run-sheet.md` is the checklist that has to be satisfied
+first. It is not a substitute for Bill naming a window, and no window exists
+until he does.
