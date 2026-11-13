@@ -1,13 +1,22 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "purpose": "Scripted action list for the Stage 1 producer evaluation. This file IS the comparison baseline: the kernel stream is compared against what this list says should have happened, not against Agent Diary.",
   "note": "Every action runs inside the dedicated scope recorded in the run manifest. All file activity stays under the scratch directory. Network activity is loopback only.",
+
+  "accounting": {
+    "not_instrumented": "The probe set has no probe for this event class. Reported as an expected gap and excluded from the action-recall denominator.",
+    "instrumented_not_observed": "A probe covers this class but nothing was recorded. A real miss.",
+    "observed_outside_scope": "Events of this class appeared, but not attributed to the run's cgroup.",
+    "observed_and_attributed": "Recorded and joined to the run's cgroup. Counted as a hit.",
+    "rule": "not_instrumented is never counted as a miss, and never folded into a recall denominator. Stage 1 does not claim to observe rename or unlink."
+  },
 
   "actions": [
     {
       "id": "A1",
       "name": "exec_success",
       "class": "exec",
+      "observed_by": "probes/exec.bt",
       "expect": "at least one successful exec of /bin/echo",
       "command": "/bin/echo stage1-a1"
     },
@@ -15,6 +24,7 @@
       "id": "A2",
       "name": "exec_failure",
       "class": "exec",
+      "observed_by": "probes/exec.bt",
       "expect": "one or more failed exec attempts on a path that does not exist",
       "command": "/nonexistent/stage1-binary-that-cannot-exist"
     },
@@ -22,6 +32,7 @@
       "id": "A3",
       "name": "write_file",
       "class": "file_write",
+      "observed_by": "probes/file.bt",
       "expect": "at least one write-intent open that succeeds",
       "command": "printf 'stage1-a3\\n' > \"$SCRATCH/a3.txt\""
     },
@@ -29,6 +40,7 @@
       "id": "A4",
       "name": "read_file",
       "class": "file_read",
+      "observed_by": "probes/file.bt",
       "expect": "at least one read-only open that succeeds",
       "command": "cat \"$SCRATCH/a3.txt\" > /dev/null"
     },
@@ -36,20 +48,27 @@
       "id": "A5",
       "name": "rename_file",
       "class": "file_rename",
-      "expect": "rename of a file inside the scratch directory",
+      "observed_by": "none",
+      "instrumented": false,
+      "expect": "EXPECTED GAP — no probe observes rename in Stage 1",
+      "consequence": "Reported as intentionally unsupported. Not a miss; excluded from the recall denominator.",
       "command": "mv \"$SCRATCH/a3.txt\" \"$SCRATCH/a5.txt\""
     },
     {
       "id": "A6",
       "name": "unlink_file",
       "class": "file_unlink",
-      "expect": "unlink of a file inside the scratch directory",
+      "observed_by": "none",
+      "instrumented": false,
+      "expect": "EXPECTED GAP — no probe observes unlink in Stage 1",
+      "consequence": "Reported as intentionally unsupported. Not a miss; excluded from the recall denominator.",
       "command": "rm -f \"$SCRATCH/a5.txt\""
     },
     {
       "id": "A7",
       "name": "background_child",
       "class": "subprocess",
+      "observed_by": "probes/exec.bt",
       "expect": "a child process that outlives its parent briefly; child inherits the scope cgroup",
       "command": "bash -c '(sleep 2) &'"
     },
@@ -57,20 +76,23 @@
       "id": "A8",
       "name": "connect_success",
       "class": "network",
+      "observed_by": "probes/net.bt",
       "expect": "one successful connect to the loopback listener",
-      "command": "see run-sheet: loopback listener on 127.0.0.1:$PORT"
+      "command": "see run.sh: loopback listener on 127.0.0.1:$PORT"
     },
     {
       "id": "A9",
       "name": "connect_failure",
       "class": "network",
+      "observed_by": "probes/net.bt",
       "expect": "one failed connect to a closed loopback port",
-      "command": "see run-sheet: connect to 127.0.0.1:$CLOSED_PORT"
+      "command": "see run.sh: connect to 127.0.0.1:$CLOSED_PORT"
     },
     {
       "id": "A10",
       "name": "exit_during_action",
       "class": "lifecycle",
+      "observed_by": "probes/file.bt",
       "expect": "a process that exits immediately after an observed action",
       "command": "bash -c 'printf x > \"$SCRATCH/a10.txt\"; exit 0'"
     }
@@ -78,6 +100,7 @@
 
   "not_measured": [
     "paths of file events (the file probe does not read filenames)",
+    "rename and unlink (not instrumented by this probe set)",
     "connection destinations (the net probe does not read sockaddr)",
     "behaviour of arbitrary agent activity (this is a scripted workload)"
   ]
