@@ -41,7 +41,7 @@ from pathlib import Path
 
 from .claims import TOOL_ACTIONS, iter_jsonl
 from .correlation import AgentClaim
-from .events import TargetState
+from .events import TargetState, target_is_consistent
 
 EXPORT_VERSION = 2
 
@@ -196,6 +196,24 @@ def validate_export(text: str) -> ExportValidation:
                 result.problems.append(
                     ExportProblem(number, f"unrecognised_action:{action}")
                 )
+
+        # The state is validated here as well as in the adapter. The adapter is
+        # what actually refuses a bad record, so this is not the only defence —
+        # but a function called validate_export should not hand back "usable"
+        # for a file whose states are unreadable or contradict their targets.
+        declared = payload.get("target_state")
+        if declared is not None:
+            try:
+                state = TargetState(str(declared).strip().lower())
+            except ValueError:
+                result.problems.append(
+                    ExportProblem(number, f"unrecognised_target_state:{declared}")
+                )
+            else:
+                if not target_is_consistent(payload.get("target"), state):
+                    result.problems.append(
+                        ExportProblem(number, "target_state_contradicts_target")
+                    )
 
     return result
 

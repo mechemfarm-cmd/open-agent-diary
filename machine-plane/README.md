@@ -311,6 +311,13 @@ rather than written as nulls, so a reader cannot mistake "no target recorded" fo
 rejecting them — a validator that refuses a producer's own fields would simply be
 bypassed.
 
+**The validator checks the state, not just its name.** A record whose
+`target_state` is unreadable, or whose state contradicts its target, is reported
+rather than counted as usable. The adapter is what refuses such a record on the
+real path, so this is a second line rather than the only one — but a function
+called `validate_export` should not answer "usable" about a file it has not
+actually understood.
+
 **The exporter cannot read a Diary either.** It writes already-neutral records
 and validates files someone else produced; it knows no database. The piece that
 opens a real store belongs outside, on the far side of an export step someone

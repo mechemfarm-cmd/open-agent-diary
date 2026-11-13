@@ -157,6 +157,70 @@ class ValidationTest(unittest.TestCase):
         self.assertTrue(validation.ok)
         self.assertEqual(validation.records, 0)
 
+    def test_consistent_target_states_are_accepted(self) -> None:
+        text = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "capture_id": "r",
+                        "action": "write",
+                        "wall_time": WALL,
+                        "target": "/x",
+                        "target_state": "present",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "capture_id": "r",
+                        "action": "write",
+                        "wall_time": WALL,
+                        "target_state": "absent",
+                    }
+                ),
+            ]
+        )
+        self.assertTrue(validate_export(text).ok)
+
+    def test_an_unrecognised_target_state_is_reported(self) -> None:
+        """The validator should not call a file usable when the state is noise."""
+        text = json.dumps(
+            {
+                "capture_id": "r",
+                "action": "write",
+                "wall_time": WALL,
+                "target_state": "not-a-state",
+            }
+        )
+        validation = validate_export(text)
+        self.assertFalse(validation.ok)
+        self.assertEqual(
+            validation.problems[0].reason,
+            "unrecognised_target_state:not-a-state",
+        )
+
+    def test_a_contradictory_target_state_is_reported(self) -> None:
+        text = json.dumps(
+            {
+                "capture_id": "r",
+                "action": "write",
+                "wall_time": WALL,
+                "target": "/x",
+                "target_state": "absent",
+            }
+        )
+        validation = validate_export(text)
+        self.assertFalse(validation.ok)
+        self.assertEqual(
+            validation.problems[0].reason, "target_state_contradicts_target"
+        )
+
+    def test_an_implied_state_needs_no_validation(self) -> None:
+        """No target and no declared state is fine — it means unknown."""
+        text = json.dumps(
+            {"capture_id": "r", "action": "write", "wall_time": WALL}
+        )
+        self.assertTrue(validate_export(text).ok)
+
 
 class BoundaryTest(unittest.TestCase):
     def test_the_exporter_cannot_reach_a_database(self) -> None:
