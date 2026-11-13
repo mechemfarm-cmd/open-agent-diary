@@ -33,11 +33,16 @@ trap cleanup EXIT INT TERM
 
 # The scope records its own cgroup inode, then waits, then makes exactly one
 # observable syscall. The wait is what lets the probe attach before the trigger.
-systemd-run --user --scope --collect --unit="$PF_ID" --setenv=PF_DIR="$PF_DIR" -- \
+#
+# The trigger must run in THIS shell process, not a child: the probe filters on
+# the recorded PID, and an external command like `cat` would fork and open the
+# file under a different PID, so the filter could never match. A redirection with
+# exec is performed by bash itself.
+systemd-run --user --scope --collect --unit="$PF_ID" --setenv=PF_DIR="$PF_DIR" --expand-environment=yes -- \
     bash -c 'printf "%s\n" "$$" >"$PF_DIR/pid";
              stat -c "%i" "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)" >"$PF_DIR/inode";
              sleep 6;
-             cat /dev/null;
+             exec 3</dev/null;
              sleep 1' &
 SCOPE_PID=$!
 

@@ -134,10 +134,17 @@ also measured.
 `preflight.sh` is disposable, takes about ten seconds, and does this:
 
 1. Starts a transient scope that writes `$$` and the inode of its own cgroup
-   directory, then sleeps 6 s, then makes one `openat`.
+   directory, then sleeps 6 s, then opens a file **in that same process** (via a
+   shell redirection, not an external command).
 2. Attaches a one-line probe filtered to that PID.
 3. Compares the `cgroup` value the probe emits with the inode the process
    recorded.
+
+The trigger has to happen in the recorded process. An external command such as
+`cat` forks, so it would open the file under a different PID and the filter would
+never match — which is exactly how the first attempt at this preflight failed, on
+Emily, before any part of the real run was attempted. The preflight voided the
+run, as designed; nothing proceeded and cleanup was verified complete.
 
 **If the values differ, the run is void.** There is no fallback to process names
 or timestamps — those would produce a confident answer with no join key behind
@@ -272,7 +279,8 @@ the result out and unmounts.
 ## 8. Loss experiment
 
 A **separate session, separate capture id, separate scratch.** Deliberately
-induced loss must never be confused with the ordinary attribution result.
+induced loss must never be confused with the ordinary attribution result. The
+executable form is `loss.sh`.
 
 The lever is `BPFTRACE_PERF_RB_PAGES`, which is 64 pages per CPU by default on
 bpftrace v0.20.2 and is deliberately undersized here.
