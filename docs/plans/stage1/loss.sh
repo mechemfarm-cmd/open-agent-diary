@@ -3,11 +3,18 @@
 #
 # The question is not "did loss happen" but "was loss REPORTED". A tracer that
 # overflows silently is the failure mode the whole design exists to prevent, so
-# the signal is bpftrace's own lost-event count on stderr, checked against the
-# window in which the workload was actually running.
+# the signal is bpftrace's own lost-event count on stderr.
 #
-# Separate capture id, separate scratch, separate scope. Induced loss must never
-# be confused with attribution quality in the coverage run.
+# Three things this script refuses to do:
+#   - run past a probe that died early, treating a dead probe as a quiet one;
+#   - count a session where the churn workload never started;
+#   - call any non-empty stderr "loss".
+#
+# SCOPE OF THE MEASUREMENT: the probe is deliberately UNFILTERED. It measures
+# openat pressure across the whole host, not only inside the churn scope. Emily's
+# own gateway and watchers contribute to the load. The result is therefore
+# host-wide buffer pressure, and must be reported that way — not as loss
+# attributable solely to the churn workload.
 
 set -uo pipefail
 
@@ -15,7 +22,6 @@ SHEET_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_DIR="$SHEET_DIR/probes"
 DURATION=60
 RB_PAGES=2          # default is 64 per CPU on bpftrace 0.20.2 — 32x smaller here
-TARGET_RATE=5000    # opens per second
 
 CAPTURE_ID="mp1-loss-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SCOPE="mp-stage1-loss-${CAPTURE_ID}"
@@ -67,43 +73,48 @@ sudo mount -t tmpfs -o size=256M,mode=0700 tmpfs "$SCRATCH" || fail "tmpfs mount
 MOUNTED=1
 sudo chown "$(id -u):$(id -g)" "$SCRATCH" || fail "cannot chown scratch"
 
-# The workload: a paced openat loop, so the rate is known rather than whatever
-# the machine happens to manage. It waits behind a gate so the probe is attached
-# before any of it runs.
+# ------------------------------------------------------------------ workload
+# Paced openat loop. It announces itself after the gate opens, and appends a
+# running count, so the session can prove it actually did work.
 cat >"$SCRATCH/churn.py" <<'PY'
 import os, time
-path = os.path.join(os.environ["SCRATCH"], "churn.txt")
-gate = os.path.join(os.environ["SCRATCH"], "go")
+scratch = os.environ["SCRATCH"]
+path = os.path.join(scratch, "churn.txt")
+gate = os.path.join(scratch, "go")
 for _ in range(300):
     if os.path.exists(gate):
         break
     time.sleep(0.1)
 else:
     raise SystemExit("gate timeout")
+
+# Proof that the workload reached the gate, distinct from "the file exists".
+with open(os.path.join(scratch, "churn.ready"), "w") as ready:
+    ready.write("ready %.6f\n" % time.time())
+
 n = 0
-with open(os.path.join(os.environ["SCRATCH"], "rate.log"), "w") as rate:
-    started = time.time()
+started = time.time()
+with open(os.path.join(scratch, "rate.log"), "w") as rate:
     while True:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
         os.close(fd)
         n += 1
         if n % 50 == 0:
             time.sleep(0.01)      # 50 opens per 10 ms ~= 5000/s
-            if n % 5000 == 0:
-                rate.write("%f %d\n" % (time.time(), n))
-                rate.flush()
+        if n % 1000 == 0:
+            rate.write("%.6f %d\n" % (time.time() - started, n))
+            rate.flush()
 PY
 
 log "starting scope $SCOPE"
 systemd-run --user --scope --collect --unit="$SCOPE" \
     --setenv=SCRATCH="$SCRATCH" --expand-environment=yes \
     --property=MemoryMax=768M --property=CPUQuota=200% \
-    -- bash -c 'timeout '"$((DURATION + 5))"' python3 "$SCRATCH/churn.py"' &
+    -- bash -c 'timeout '"$((DURATION + 10))"' python3 "$SCRATCH/churn.py"' &
 SCOPE_JOB=$!
 
-for _ in $(seq 1 100); do [ -d "$SCRATCH" ] && break; sleep 0.1; done
-
-log "attaching file probe with BPFTRACE_PERF_RB_PAGES=$RB_PAGES"
+# --------------------------------------------------------------------- probe
+log "attaching file probe with BPFTRACE_PERF_RB_PAGES=$RB_PAGES (unfiltered: host-wide)"
 sudo env BPFTRACE_PERF_RB_PAGES="$RB_PAGES" \
     bpftrace "$PROBE_DIR/file.bt" -o "$SCRATCH/loss.log" 2>"$SCRATCH/loss.err" &
 sleep 3
@@ -113,12 +124,29 @@ PROBE_PID="${PIDS[0]}"
 log "probe pid: $PROBE_PID"
 
 touch "$SCRATCH/go" || fail "cannot release the gate"
-log "running for ${DURATION}s"
-timeout "$DURATION" tail -f /dev/null 2>/dev/null || true
+
+# ------------------------------------------------------------------- window
+# Poll rather than sleep once, so a probe that dies at second 5 is noticed at
+# second 5 rather than at second 60.
+STARTED="$(date +%s)"
+PROBE_EXITED_EARLY=0
+EXITED_AT=""
+ELAPSED=0
+while :; do
+    ELAPSED=$(( $(date +%s) - STARTED ))
+    if [ "$ELAPSED" -ge "$DURATION" ]; then break; fi
+    if ! sudo kill -0 "$PROBE_PID" 2>/dev/null; then
+        PROBE_EXITED_EARLY=1
+        EXITED_AT="$ELAPSED"
+        log "probe exited early at ${ELAPSED}s"
+        break
+    fi
+    sleep 1
+done
 
 sudo kill -INT "$PROBE_PID" 2>/dev/null
 sleep 2
-sudo kill -0 "$PROBE_PID" 2>/dev/null && fail "probe survived SIGINT"
+if sudo kill -0 "$PROBE_PID" 2>/dev/null; then fail "probe survived SIGINT"; fi
 PROBE_PID=""
 
 systemctl --user stop "$SCOPE.scope" 2>/dev/null
@@ -126,7 +154,60 @@ systemctl --user reset-failed "$SCOPE.scope" 2>/dev/null
 wait "$SCOPE_JOB" 2>/dev/null
 SCOPE_JOB=""
 
-[ -s "$SCRATCH/loss.err" ] || fail "probe produced no stderr"
+# ------------------------------------------------------------------ classify
+CHURN_READY=0
+[ -s "$SCRATCH/churn.ready" ] && CHURN_READY=1
 
-log "loss session complete; stderr captured at $RESULT_DIR"
+TOTAL_OPS=0
+if [ -s "$SCRATCH/rate.log" ]; then
+    TOTAL_OPS="$(awk 'END {print ($2 == "" ? 0 : $2)}' "$SCRATCH/rate.log")"
+fi
+
+# bpftrace reports loss in its own words on stderr. Classify rather than assume:
+# "non-empty stderr" is not evidence of loss, and an error is not loss either.
+LOSS_CLASS="no_loss_reported"
+LOSS_COUNT=""
+LOSS_LINE=""
+if [ -s "$SCRATCH/loss.err" ]; then
+    LOSS_LINE="$(grep -iE 'lost' "$SCRATCH/loss.err" | head -1 || true)"
+    if [ -n "$LOSS_LINE" ]; then
+        LOSS_COUNT="$(printf '%s' "$LOSS_LINE" | grep -oE '[0-9]+' | head -1 || true)"
+        if [ -n "$LOSS_COUNT" ]; then
+            LOSS_CLASS="loss_reported"
+        else
+            # Mentions loss but not in a form this script recognises. Saying
+            # "no loss" here would be inventing a result, so say what happened.
+            LOSS_CLASS="loss_mentioned_unparsed"
+        fi
+    elif grep -qiE 'error|failed|invalid' "$SCRATCH/loss.err"; then
+        LOSS_CLASS="probe_error"
+    fi
+fi
+
+cat >"$SCRATCH/session.json" <<JSON
+{
+  "capture_id": "$CAPTURE_ID",
+  "kind": "loss",
+  "scoped_to": "host-wide — probe is unfiltered; Emily's own activity contributes",
+  "rb_pages": $RB_PAGES,
+  "planned_duration_s": $DURATION,
+  "observed_duration_s": $ELAPSED,
+  "probe_exited_early": $([ "$PROBE_EXITED_EARLY" -eq 1 ] && echo true || echo false),
+  "probe_exited_at_s": $([ -n "$EXITED_AT" ] && echo "$EXITED_AT" || echo null),
+  "churn_ready": $([ "$CHURN_READY" -eq 1 ] && echo true || echo false),
+  "churn_total_ops": $TOTAL_OPS,
+  "loss_class": "$LOSS_CLASS",
+  "loss_count": $([ -n "$LOSS_COUNT" ] && echo "$LOSS_COUNT" || echo null)
+}
+JSON
+
+log "session.json:"
+sed 's/^/  /' "$SCRATCH/session.json" >&2
+
+# ------------------------------------------------------------------- verdict
+[ "$CHURN_READY" -eq 1 ] || fail "churn workload never reached the gate — nothing was measured"
+[ "$TOTAL_OPS" -gt 0 ] || fail "churn workload recorded zero operations — nothing was measured"
+[ "$PROBE_EXITED_EARLY" -eq 0 ] || fail "probe exited early at ${EXITED_AT}s; the 60s window was not observed"
+
+log "loss session complete; result at $RESULT_DIR"
 exit 0

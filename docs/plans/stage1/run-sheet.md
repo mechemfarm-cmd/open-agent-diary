@@ -300,6 +300,30 @@ whether it is bounded to an interval. If no loss occurs at the capped rate, the
 finding is "no loss observed at this rate", not "loss does not happen". The rate
 is not raised to chase a result.
 
+### This measurement is host-wide, not scope-local
+
+The loss probe is deliberately **unfiltered**. It observes `openat` across the
+whole host, so Emily's own gateway, watchers and system services contribute to
+the pressure the buffer is under. The result is therefore **host-wide buffer
+pressure under a known local workload** — never presented as loss attributable
+solely to the churn scope. `session.json` records `scoped_to` in those words.
+
+### The script refuses three ways of lying to itself
+
+1. **A dead probe is not a quiet probe.** The window is polled once a second, so
+   a probe that exits at second 5 is noticed at second 5, not at second 60. Early
+   exit is recorded with the second it happened, and voids the session: the
+   specified 60-second window was not observed.
+2. **A session where nothing ran is not a result.** The workload writes
+   `churn.ready` when it passes the gate and appends a running operation count.
+   Both are checked; either missing or at zero voids the session. "The file
+   exists" is not evidence the workload started.
+3. **Non-empty stderr is not loss.** Output is classified as `loss_reported`
+   (with the count), `no_loss_reported`, `probe_error`, or
+   `loss_mentioned_unparsed` — the last for text that mentions loss in a form the
+   script does not recognise. That last case exists so an unfamiliar message is
+   never silently reported as "no loss".
+
 ---
 
 ## 9. Abort conditions and verification
