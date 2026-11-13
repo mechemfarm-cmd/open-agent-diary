@@ -308,17 +308,25 @@ the pressure the buffer is under. The result is therefore **host-wide buffer
 pressure under a known local workload** — never presented as loss attributable
 solely to the churn scope. `session.json` records `scoped_to` in those words.
 
-### The script refuses three ways of lying to itself
+### The script refuses four ways of lying to itself
 
 1. **A dead probe is not a quiet probe.** The window is polled once a second, so
    a probe that exits at second 5 is noticed at second 5, not at second 60. Early
    exit is recorded with the second it happened, and voids the session: the
    specified 60-second window was not observed.
-2. **A session where nothing ran is not a result.** The workload writes
+2. **A live probe over a dead workload is not a measurement.** The churn process
+   records its PID and start time before it does anything, and is checked on
+   every poll tick for the whole window — by PID *and* start time, so a reused
+   PID cannot impersonate it. If it dies before the window ends, the session is
+   void even though the probe kept running. Otherwise a five-second burst
+   followed by 55 seconds of Emily's own activity would look like a valid
+   result. `workload_duration_s`, `workload_status` and `workload_died_at_s` are
+   recorded separately from `probe_duration_s`.
+3. **A session where nothing ran is not a result.** The workload writes
    `churn.ready` when it passes the gate and appends a running operation count.
    Both are checked; either missing or at zero voids the session. "The file
    exists" is not evidence the workload started.
-3. **Non-empty stderr is not loss.** Output is classified as `loss_reported`
+4. **Non-empty stderr is not loss.** Output is classified as `loss_reported`
    (with the count), `no_loss_reported`, `probe_error`, or
    `loss_mentioned_unparsed` — the last for text that mentions loss in a form the
    script does not recognise. That last case exists so an unfamiliar message is

@@ -78,9 +78,32 @@ sudo chown "$(id -u):$(id -g)" "$SCRATCH" || fail "cannot chown scratch"
 # running count, so the session can prove it actually did work.
 cat >"$SCRATCH/churn.py" <<'PY'
 import os, time
+
+
+def start_ticks(pid):
+    """Field 22 of /proc/<pid>/stat: start time in clock ticks since boot.
+
+    Recorded so the runner can tell this process from one that later reuses the
+    same PID, and so the monitored identity is not just a number.
+    """
+    try:
+        with open("/proc/%d/stat" % pid) as handle:
+            raw = handle.read()
+        return raw.rsplit(")", 1)[1].split()[19]
+    except Exception:
+        return "unknown"
+
+
 scratch = os.environ["SCRATCH"]
 path = os.path.join(scratch, "churn.txt")
 gate = os.path.join(scratch, "go")
+
+# Identity before anything else. The runner watches this PID for the entire
+# window, so a workload that dies at second 5 cannot be mistaken for a quiet
+# run from second 6 onwards.
+with open(os.path.join(scratch, "churn.identity"), "w") as identity:
+    identity.write("%d %s %.6f\n" % (os.getpid(), start_ticks(os.getpid()), time.time()))
+
 for _ in range(300):
     if os.path.exists(gate):
         break
@@ -125,24 +148,61 @@ log "probe pid: $PROBE_PID"
 
 touch "$SCRATCH/go" || fail "cannot release the gate"
 
+# ------------------------------------------------------------------ workload
+# The workload must be identified and then watched for the whole window. Proving
+# it started is not enough: a churn process that dies at second 5 leaves 55
+# seconds of host-only activity that would otherwise look like a valid result.
+for _ in $(seq 1 100); do [ -s "$SCRATCH/churn.identity" ] && break; sleep 0.1; done
+[ -s "$SCRATCH/churn.identity" ] || fail "churn workload never recorded its identity"
+read -r CHURN_PID CHURN_START_TICKS CHURN_STARTED_AT <"$SCRATCH/churn.identity"
+[ -n "${CHURN_PID:-}" ] || fail "churn identity has no pid"
+log "churn pid=$CHURN_PID start_ticks=$CHURN_START_TICKS"
+
+workload_alive() {
+    [ -n "${CHURN_PID:-}" ] || return 1
+    [ -r "/proc/$CHURN_PID/stat" ] || return 1
+    local now_ticks
+    now_ticks="$(cut -d' ' -f22 "/proc/$CHURN_PID/stat" 2>/dev/null)" || return 1
+    # Same PID, same start time: still our process, not a reused number.
+    [ "$now_ticks" = "$CHURN_START_TICKS" ]
+}
+
 # ------------------------------------------------------------------- window
-# Poll rather than sleep once, so a probe that dies at second 5 is noticed at
-# second 5 rather than at second 60.
+# Poll rather than sleep once, so either process dying is noticed within a
+# second rather than at the end of the minute.
 STARTED="$(date +%s)"
 PROBE_EXITED_EARLY=0
 EXITED_AT=""
+WORKLOAD_DIED=0
+WORKLOAD_DIED_AT=""
 ELAPSED=0
 while :; do
     ELAPSED=$(( $(date +%s) - STARTED ))
     if [ "$ELAPSED" -ge "$DURATION" ]; then break; fi
-    if ! sudo kill -0 "$PROBE_PID" 2>/dev/null; then
+    if [ "$PROBE_EXITED_EARLY" -eq 0 ] && ! sudo kill -0 "$PROBE_PID" 2>/dev/null; then
         PROBE_EXITED_EARLY=1
         EXITED_AT="$ELAPSED"
         log "probe exited early at ${ELAPSED}s"
         break
     fi
+    if ! workload_alive; then
+        WORKLOAD_DIED=1
+        WORKLOAD_DIED_AT="$ELAPSED"
+        log "workload died at ${ELAPSED}s"
+        break
+    fi
     sleep 1
 done
+
+# Actual churn duration is its own number, distinct from how long the probe
+# window ran. They are only equal when the workload survived the window.
+if [ "$WORKLOAD_DIED" -eq 1 ]; then
+    WORKLOAD_DURATION="$WORKLOAD_DIED_AT"
+    WORKLOAD_STATUS="exited_early"
+else
+    WORKLOAD_DURATION="$ELAPSED"
+    WORKLOAD_STATUS="running_at_window_end"
+fi
 
 sudo kill -INT "$PROBE_PID" 2>/dev/null
 sleep 2
@@ -191,7 +251,13 @@ cat >"$SCRATCH/session.json" <<JSON
   "scoped_to": "host-wide — probe is unfiltered; Emily's own activity contributes",
   "rb_pages": $RB_PAGES,
   "planned_duration_s": $DURATION,
-  "observed_duration_s": $ELAPSED,
+  "probe_duration_s": $ELAPSED,
+  "workload_duration_s": $WORKLOAD_DURATION,
+  "workload_status": "$WORKLOAD_STATUS",
+  "workload_died_at_s": $([ -n "$WORKLOAD_DIED_AT" ] && echo "$WORKLOAD_DIED_AT" || echo null),
+  "churn_pid": $CHURN_PID,
+  "churn_start_ticks": "$CHURN_START_TICKS",
+  "churn_started_at": $CHURN_STARTED_AT,
   "probe_exited_early": $([ "$PROBE_EXITED_EARLY" -eq 1 ] && echo true || echo false),
   "probe_exited_at_s": $([ -n "$EXITED_AT" ] && echo "$EXITED_AT" || echo null),
   "churn_ready": $([ "$CHURN_READY" -eq 1 ] && echo true || echo false),
@@ -207,7 +273,8 @@ sed 's/^/  /' "$SCRATCH/session.json" >&2
 # ------------------------------------------------------------------- verdict
 [ "$CHURN_READY" -eq 1 ] || fail "churn workload never reached the gate — nothing was measured"
 [ "$TOTAL_OPS" -gt 0 ] || fail "churn workload recorded zero operations — nothing was measured"
-[ "$PROBE_EXITED_EARLY" -eq 0 ] || fail "probe exited early at ${EXITED_AT}s; the 60s window was not observed"
+[ "$WORKLOAD_DIED" -eq 0 ] || fail "workload died at ${WORKLOAD_DIED_AT}s; the ${DURATION}s window was not observed"
+[ "$PROBE_EXITED_EARLY" -eq 0 ] || fail "probe exited early at ${EXITED_AT}s; the ${DURATION}s window was not observed"
 
 log "loss session complete; result at $RESULT_DIR"
 exit 0
