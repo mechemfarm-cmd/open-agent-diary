@@ -292,7 +292,7 @@ def _paths_in_command(command: str) -> set[str]:
         if token.startswith(("~/", "/", "./", "../")):
             paths.add(token)
         elif token.endswith((".py", ".js", ".ts", ".json", ".yaml", ".yml",
-                             ".assistantl", ".md", ".sh", ".txt", ".css", ".html")):
+                             ".toml", ".md", ".sh", ".txt", ".css", ".html")):
             paths.add(token)
     return paths
 
