@@ -68,7 +68,12 @@ tracepoint:syscalls:sys_enter_openat /pid == $1/ {
     exit();
 }' "$TARGET_PID" >"$PF_DIR/observed" 2>"$PF_DIR/observed.err" || true
 
-OBSERVED="$(tail -1 "$PF_DIR/observed" 2>/dev/null || true)"
+# bpftrace writes its "Attaching 1 probe..." banner to stdout ahead of the
+# observation, and emits trailing blank lines once exit() fires — so the LAST
+# line is a blank, not the value. `tail -1` therefore read an empty string and
+# reported "probe emitted nothing" even when the probe worked perfectly. Take the
+# first line that is nothing but digits instead.
+OBSERVED="$(grep -oE '^[0-9]+$' "$PF_DIR/observed" 2>/dev/null | head -1 || true)"
 
 if [ -z "$OBSERVED" ]; then
     log "PREFLIGHT FAILED: probe emitted nothing"
