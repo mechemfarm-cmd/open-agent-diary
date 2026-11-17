@@ -92,16 +92,19 @@
       "id": "A10",
       "name": "exit_during_action",
       "class": "lifecycle",
-      "observed_by": "probes/file.bt",
-      "expect": "a process that exits immediately after an observed action",
+      "observed_by": "none",
+      "instrumented": false,
+      "expect": "EXPECTED GAP — no probe observes process exit in Stage 1",
+      "consequence": "Reported as intentionally unsupported. Not a miss; excluded from the recall denominator. This was previously listed as observed_by probes/file.bt, which observes openat only and cannot see a process exit; the Stage 1 run confirmed that no probe in the set emits an exit event.",
       "command": "bash -c 'printf x > \"$SCRATCH/a10.txt\"; exit 0'"
     }
   ],
 
   "not_measured": [
     "paths of file events (the file probe does not read filenames)",
-    "rename and unlink (not instrumented by this probe set)",
+    "rename, unlink and process exit (not instrumented by this probe set)",
     "connection destinations (the net probe does not read sockaddr)",
+    "connection outcomes where the socket is non-blocking (the syscall reports EINPROGRESS; success and failure are indistinguishable)",
     "behaviour of arbitrary agent activity (this is a scripted workload)"
   ]
 }
