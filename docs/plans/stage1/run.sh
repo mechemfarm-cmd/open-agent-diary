@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run.sh — Stage 1 coverage session. Not approved to run yet.
+# run.sh — Stage 1 coverage session.
 #
 # Everything here is deliberate: absolute paths, an explicit scope with exported
 # environment, the run manifest written BEFORE any probe attaches, PID-directed
@@ -135,7 +135,19 @@ sudo bpftrace "$PROBE_DIR/file.bt" -o "$SCRATCH/file.log" 2>"$SCRATCH/file.err" 
 sudo bpftrace "$PROBE_DIR/net.bt"  -o "$SCRATCH/net.log"  2>"$SCRATCH/net.err" &
 sleep 3
 
-mapfile -t PROBE_PIDS < <(pgrep -f "bpftrace $PROBE_DIR/" || true)
+# Match on process NAME, not the full command line.
+#
+# "sudo bpftrace <probedir>/exec.bt" leaves TWO processes whose command lines
+# contain "bpftrace <probedir>/": the sudo wrapper (comm=sudo) and the real
+# tracer (comm=bpftrace). A -f match therefore returns six for three probes, and
+# the teardown below would signal sudo wrappers rather than the tracers. Filter
+# by comm and confirm the command line names our own probe directory.
+mapfile -t PROBE_PIDS < <(
+    for p in $(pgrep -x bpftrace || true); do
+        tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null \
+            | grep -q "bpftrace $PROBE_DIR/" && echo "$p"
+    done
+)
 [ "${#PROBE_PIDS[@]}" -eq 3 ] || fail "expected 3 probes, found ${#PROBE_PIDS[@]}"
 log "probe pids: ${PROBE_PIDS[*]}"
 

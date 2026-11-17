@@ -142,7 +142,16 @@ log "attaching file probe with BPFTRACE_PERF_RB_PAGES=$RB_PAGES (unfiltered: hos
 sudo env BPFTRACE_PERF_RB_PAGES="$RB_PAGES" \
     bpftrace "$PROBE_DIR/file.bt" -o "$SCRATCH/loss.log" 2>"$SCRATCH/loss.err" &
 sleep 3
-mapfile -t PIDS < <(pgrep -f "bpftrace $PROBE_DIR/file.bt" || true)
+# Match on process NAME, not the full command line: "sudo env ... bpftrace
+# <probedir>/file.bt" leaves both the sudo wrapper (comm=sudo) and the real tracer
+# (comm=bpftrace) with that text in their command lines, so a -f match returns two
+# for one probe and the check below would abort a healthy session.
+mapfile -t PIDS < <(
+    for p in $(pgrep -x bpftrace || true); do
+        tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null \
+            | grep -q "bpftrace $PROBE_DIR/file.bt" && echo "$p"
+    done
+)
 [ "${#PIDS[@]}" -eq 1 ] || fail "expected 1 probe, found ${#PIDS[@]}"
 PROBE_PID="${PIDS[0]}"
 log "probe pid: $PROBE_PID"

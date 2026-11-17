@@ -260,8 +260,11 @@ binding over it.
    workload PID and start ticks. This happens **before any attach**.
 5. **Listener.** Start the loopback listener outside the scope; fail if it dies.
 6. **Probes.** Attach the three probes with absolute paths from `$PROBE_DIR`;
-   resolve their real PIDs with `pgrep -f "bpftrace $PROBE_DIR/"`; require
-   exactly three. If not three, abort.
+   resolve their real PIDs by process **name** (`pgrep -x bpftrace`) and confirm
+   each command line names our own probe directory; require exactly three. If not
+   three, abort. Matching the full command line instead would return six — the
+   `sudo` wrapper and the tracer both carry `bpftrace $PROBE_DIR/…` — and the
+   teardown in step 8 would then signal the wrappers rather than the tracers.
 7. **Release.** Touch the gate; wait for the scope to finish.
 8. **Stop.** `kill -INT` each recorded probe PID by number, then confirm each has
    exited. There is no `pkill -f` wildcard anywhere: a broad pattern can miss the
