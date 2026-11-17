@@ -38,7 +38,13 @@ trap cleanup EXIT INT TERM
 # the recorded PID, and an external command like `cat` would fork and open the
 # file under a different PID, so the filter could never match. A redirection with
 # exec is performed by bash itself.
-systemd-run --user --scope --collect --unit="$PF_ID" --setenv=PF_DIR="$PF_DIR" --expand-environment=yes -- \
+# --expand-environment=no is required, not cosmetic: with expansion enabled,
+# systemd rewrites "$$" into a literal "$", so the scope writes "$" instead of a
+# PID and the probe filter below becomes /pid == $/, which does not compile. The
+# inner shell still gets PF_DIR from --setenv, so nothing else needs expanding.
+# Stated explicitly rather than left to the default, which systemd warns will
+# change to "yes" in a future release.
+systemd-run --user --scope --collect --unit="$PF_ID" --setenv=PF_DIR="$PF_DIR" --expand-environment=no -- \
     bash -c 'printf "%s\n" "$$" >"$PF_DIR/pid";
              stat -c "%i" "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)" >"$PF_DIR/inode";
              sleep 6;
