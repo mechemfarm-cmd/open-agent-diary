@@ -58,7 +58,41 @@ producer.
    spool and cannot submit an event, expressed as checks that fail if the
    boundary is weakened.
 
-## 3. The six declared gaps
+### Built: the producer
+
+Commit `0eb5d49` on `feature/machine-plane-core`. Two modes, and they are not
+equivalent:
+
+- **live** — one `bpftrace` process attached **per probe script**;
+- **replay** — reads an already-captured log. This exists so the producer is
+  testable without root, and it is the mode the test suite uses.
+
+**Four defects were found and fixed while reviewing the first implementation**,
+each reproduced before being changed. They are recorded because three of the four
+were the *silent* kind, which is the failure mode this whole design exists to
+prevent:
+
+| Defect | Why it mattered |
+|---|---|
+| `target_state=ABSENT` on open/connect/exec_attempt | Those actions have targets the probe deliberately never reads. `ABSENT` claims the action had **no target at all** — the precise ambiguity `TargetState` exists to remove. Corrected to `UNKNOWN`. The original test asserted `ABSENT`, so it locked the defect in rather than catching it. |
+| `wall_time` was the kernel monotonic timestamp | The probes emit `nsecs` — seconds since boot. Every event was stamped in **January 1970** against a real clock of 1.79e9. Now paired with the capture wall clock and offset per event, preserving inter-event deltas. |
+| Every probe script passed to one `bpftrace` invocation | Reproduced on this host: `bpftrace a.bt b.bt` attaches **only the first** and silently ignores the rest. The file and net probes would never have run. |
+| Unreadable `EV` lines skipped silently | A dropped line and an event that never happened are indistinguishable downstream. Now becomes an `UNSUPPORTED_KERNEL_FEATURE` gap event with a scoped coverage note and a lost count. |
+
+**A seventh gap was found while building**, and is declared alongside the six:
+`PROCESS_START_TIME`. The probes emit `pid`, `tid` and `cgroup` but **no start
+ticks**, so a reused PID cannot be distinguished from the original process.
+Identity is therefore a composite of boot id, isolation domain and pid,
+`process_start_time` is left unset rather than guessed, and `identity_confidence`
+is `AMBIGUOUS` rather than `CERTAIN`. Claiming certainty there would have been an
+overclaim of exactly the kind the Stage 1 loss runner was fixed for.
+
+Verified: **244 passed, 25 subtests passed** (baseline 231 + 13 new), no
+regressions. Live-mode launching confirmed with a stub `bpftrace`: three probe
+scripts given, three observed to run. No probe attached to any host, no root used,
+no service installed.
+
+## 3. The declared gaps
 
 From the Stage 1 result. Each is a capability the producer reports as
 unavailable, with the reason, so a missing event is never mistaken for "nothing
@@ -72,10 +106,12 @@ happened":
 | file paths not captured | `file.bt` does not dereference `args->filename` at all |
 | connection destinations not captured | `net.bt` does not read `sockaddr` |
 | connect outcomes unresolved | non-blocking sockets return `-115` EINPROGRESS, so success and failure are indistinguishable |
+| process start time not captured | the probes emit pid, tid and cgroup but no start ticks, so a reused PID cannot be distinguished from the original — found while building, not during Stage 1 |
 
-The last one is the subtlest: the probe records *that* a connect was attempted,
+The connect one is the subtlest: the probe records *that* a connect was attempted,
 and the outcome genuinely cannot be resolved from that event. The producer reports
-it as unavailable rather than guessing.
+it as unavailable rather than guessing. The start-time one matters because it is
+what makes identity confidence `AMBIGUOUS` rather than `CERTAIN`.
 
 ## 4. Privacy position, restated because it is load-bearing
 
