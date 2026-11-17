@@ -23,6 +23,13 @@ class Capability(str, Enum):
     FILE_ACTIVITY = "file_activity"
     NETWORK_CONNECT = "network_connect"
     KERNEL_LOCKDOWN_MODE = "kernel_lockdown_mode"
+    FILE_RENAME = "file_rename"
+    FILE_UNLINK = "file_unlink"
+    PROCESS_EXIT = "process_exit"
+    PROCESS_START_TIME = "process_start_time"
+    FILE_PATHS = "file_paths"
+    NETWORK_DESTINATIONS = "network_destinations"
+    NETWORK_CONNECT_OUTCOMES = "network_connect_outcomes"
 
 
 @dataclass(frozen=True)
