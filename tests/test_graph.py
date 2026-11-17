@@ -101,11 +101,11 @@ class TestGraphSchema(unittest.TestCase):
 
 class TestGraphModels(unittest.TestCase):
     def test_entity_auto_normalize(self):
-        e = GraphEntity(canonical_name="  Emily ")
-        self.assertEqual(e.normalized_name, "emily")
+        e = GraphEntity(canonical_name="  Laptop ")
+        self.assertEqual(e.normalized_name, "laptop")
 
     def test_normalize_name(self):
-        self.assertEqual(normalize_name("  Lucy  Server "), "lucy server")
+        self.assertEqual(normalize_name("  Workstation  Server "), "workstation server")
 
     def test_predicate_registry(self):
         self.assertEqual(PREDICATE_REGISTRY["RUNS_ON"]["cardinality"], "single")
@@ -128,38 +128,38 @@ class TestGraphRepository(unittest.TestCase):
         bootstrap_sqlite(self.db_path)
 
     def test_entity_crud(self):
-        e = GraphEntity(canonical_name="Emily", entity_type="device")
+        e = GraphEntity(canonical_name="Laptop", entity_type="device")
         insert_entity(self.db_path, e)
         got = get_entity(self.db_path, e.entity_id)
-        self.assertEqual(got["canonical_name"], "Emily")
+        self.assertEqual(got["canonical_name"], "Laptop")
         self.assertEqual(got["entity_type"], "device")
-        self.assertEqual(got["normalized_name"], "emily")
+        self.assertEqual(got["normalized_name"], "laptop")
 
     def test_find_entity_by_name(self):
-        e = GraphEntity(canonical_name="Lucy", entity_type="device")
+        e = GraphEntity(canonical_name="Workstation", entity_type="device")
         insert_entity(self.db_path, e)
-        found = find_entity(self.db_path, "lucy")
+        found = find_entity(self.db_path, "workstation")
         self.assertEqual(len(found), 1)
 
     def test_find_entity_by_alias(self):
-        e = GraphEntity(canonical_name="Art", entity_type="device")
+        e = GraphEntity(canonical_name="Server", entity_type="device")
         insert_entity(self.db_path, e)
-        insert_alias(self.db_path, "a1", e.entity_id, "Art Server", "user_assertion", "manual")
-        found = find_entity(self.db_path, "Art Server")
+        insert_alias(self.db_path, "a1", e.entity_id, "Server Rack", "user_assertion", "manual")
+        found = find_entity(self.db_path, "Server Rack")
         self.assertEqual(len(found), 1)
 
     def test_obvious_alias_resolution(self):
-        e = GraphEntity(canonical_name="Emily", entity_type="device")
+        e = GraphEntity(canonical_name="Laptop", entity_type="device")
         insert_entity(self.db_path, e)
-        resolved = resolve_obvious_alias(self.db_path, "Emily")
+        resolved = resolve_obvious_alias(self.db_path, "Laptop")
         self.assertEqual(resolved, e.entity_id)
         ambiguous = resolve_obvious_alias(self.db_path, "NONEXISTENT")
         self.assertIsNone(ambiguous)
 
     def test_alias_resolution_ambiguous(self):
         """Acceptance criterion 5: Obvious aliases resolve; ambiguous do not merge."""
-        e1 = GraphEntity(canonical_name="Emily", entity_type="device")
-        e2 = GraphEntity(canonical_name="Em", entity_type="person")
+        e1 = GraphEntity(canonical_name="Laptop", entity_type="device")
+        e2 = GraphEntity(canonical_name="Lap", entity_type="person")
         insert_entity(self.db_path, e1)
         insert_entity(self.db_path, e2)
         # Both entities have an alias "ember" — ambiguous
@@ -170,7 +170,7 @@ class TestGraphRepository(unittest.TestCase):
 
     def test_fact_lifecycle(self):
         subj = GraphEntity(canonical_name="Pi-hole", entity_type="software_service")
-        obj = GraphEntity(canonical_name="Lucy", entity_type="device")
+        obj = GraphEntity(canonical_name="Workstation", entity_type="device")
         insert_entity(self.db_path, subj)
         insert_entity(self.db_path, obj)
 
@@ -188,13 +188,13 @@ class TestGraphRepository(unittest.TestCase):
     def test_retraction(self):
         """Acceptance criterion 8: Retraction preserves old fact and correction reason."""
         subj = GraphEntity(canonical_name="Docker", entity_type="software_service")
-        obj = GraphEntity(canonical_name="Lucy", entity_type="device")
+        obj = GraphEntity(canonical_name="Workstation", entity_type="device")
         insert_entity(self.db_path, subj)
         insert_entity(self.db_path, obj)
 
         f = GraphFact(subject_entity_id=subj.entity_id, predicate="RUNS_ON", object_entity_id=obj.entity_id)
         insert_fact(self.db_path, f)
-        ae = GraphAssertionEvent(event_type="fact_retracted", author="user", reason="Lucy never ran Docker",
+        ae = GraphAssertionEvent(event_type="fact_retracted", author="user", reason="Workstation never ran Docker",
                                  payload={"fact_id": f.fact_id})
         insert_assertion_event(self.db_path, ae)
         retract_fact(self.db_path, f.fact_id, ae.event_id)
@@ -224,7 +224,7 @@ class TestGraphRepository(unittest.TestCase):
     def test_planned_facts_excluded(self):
         """Acceptance criterion 9: Planned facts excluded from normal current-state queries."""
         subj = GraphEntity(canonical_name="Planned", entity_type="project")
-        obj = GraphEntity(canonical_name="Art", entity_type="device")
+        obj = GraphEntity(canonical_name="Server", entity_type="device")
         insert_entity(self.db_path, subj)
         insert_entity(self.db_path, obj)
 
@@ -295,59 +295,59 @@ class TestGraphHandlers(unittest.TestCase):
         self.paths = make_paths(Path(self.tmp))
         # Create entities for testing
         from agent_diary.index.graph_repository import insert_entity
-        self.emily = GraphEntity(canonical_name="Emily", entity_type="device")
-        self.art = GraphEntity(canonical_name="Art", entity_type="device")
-        self.lucy = GraphEntity(canonical_name="Lucy", entity_type="device")
-        insert_entity(self.paths.sqlite_path, self.emily)
-        insert_entity(self.paths.sqlite_path, self.art)
-        insert_entity(self.paths.sqlite_path, self.lucy)
+        self.laptop = GraphEntity(canonical_name="Laptop", entity_type="device")
+        self.server = GraphEntity(canonical_name="Server", entity_type="device")
+        self.workstation = GraphEntity(canonical_name="Workstation", entity_type="device")
+        insert_entity(self.paths.sqlite_path, self.laptop)
+        insert_entity(self.paths.sqlite_path, self.server)
+        insert_entity(self.paths.sqlite_path, self.workstation)
 
     def test_add_fact_with_entity_name(self):
         r = graph_add_fact(self.paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "test",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "test",
         })
         self.assertIn("fact_id", r)
         self.assertEqual(r["predicate"], "RUNS_ON")
 
     def test_correct_fact(self):
         r = graph_add_fact(self.paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "initial",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "initial",
         })
         corr = graph_correct_fact(self.paths, {
-            "fact_id": r["fact_id"], "correction": "Lucy", "reason": "moved",
+            "fact_id": r["fact_id"], "correction": "Workstation", "reason": "moved",
         })
         self.assertEqual(corr["old_fact_id"], r["fact_id"])
 
     def test_find_entity(self):
-        result = graph_find_entity(self.paths, {"query": "Emily"})
+        result = graph_find_entity(self.paths, {"query": "Laptop"})
         self.assertGreaterEqual(result["count"], 1)
 
     def test_get_entity(self):
-        result = graph_get_entity(self.paths, {"entity_id": "Emily"})
+        result = graph_get_entity(self.paths, {"entity_id": "Laptop"})
         self.assertIn("entity", result)
 
     def test_neighbors(self):
         graph_add_fact(self.paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "test",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "test",
         })
-        nbrs = graph_neighbors(self.paths, {"entity_id": "Emily"})
+        nbrs = graph_neighbors(self.paths, {"entity_id": "Laptop"})
         self.assertIn("outgoing", nbrs)
 
     def test_search(self):
         graph_add_fact(self.paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "test",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "test",
         })
-        sr = graph_search(self.paths, {"query": "Art"})
+        sr = graph_search(self.paths, {"query": "Server"})
         self.assertGreaterEqual(sr["entity_count"], 1)
 
     def test_explain_fact(self):
         r = graph_add_fact(self.paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "test",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "test",
         })
         expl = graph_explain_fact(self.paths, {"fact_id": r["fact_id"]})
         self.assertIn("fact", expl)
@@ -377,7 +377,7 @@ class TestGraphHandlers(unittest.TestCase):
             self.assertEqual(submit["status"], "no_facts")
 
     def test_merge_alias(self):
-        am = graph_merge_alias(self.paths, {"entity_id": "Emily", "alias": "Em"})
+        am = graph_merge_alias(self.paths, {"entity_id": "Laptop", "alias": "Lap"})
         self.assertIn("alias_id", am)
 
 
@@ -387,15 +387,15 @@ class TestGraphConsistency(unittest.TestCase):
     def test_event_time(self):
         tmp = tempfile.mkdtemp()
         paths = make_paths(Path(tmp))
-        emily = GraphEntity(canonical_name="Emily", entity_type="device")
-        art = GraphEntity(canonical_name="Art", entity_type="device")
+        laptop = GraphEntity(canonical_name="Laptop", entity_type="device")
+        server = GraphEntity(canonical_name="Server", entity_type="device")
         from agent_diary.index.graph_repository import insert_entity
-        insert_entity(paths.sqlite_path, emily)
-        insert_entity(paths.sqlite_path, art)
+        insert_entity(paths.sqlite_path, laptop)
+        insert_entity(paths.sqlite_path, server)
 
         r = graph_add_fact(paths, {
-            "subject_id": "Emily", "predicate": "RUNS_ON", "object_kind": "entity",
-            "object_entity_id": "Art", "author": "user", "reason": "test",
+            "subject_id": "Laptop", "predicate": "RUNS_ON", "object_kind": "entity",
+            "object_entity_id": "Server", "author": "user", "reason": "test",
             "source_timestamp": "2026-03-15T10:00:00Z",
         })
         expl = graph_explain_fact(paths, {"fact_id": r["fact_id"]})

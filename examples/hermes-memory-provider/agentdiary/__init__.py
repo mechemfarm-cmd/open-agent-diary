@@ -52,8 +52,7 @@ def _autonomy_module(name: str):
         return importlib.import_module(name)
 
 _DIARY_BASE = os.environ.get("AGENTDIARY_URL", "http://127.0.0.1:8041")
-# Diary data root differs per host (Emily: ~/development/agent-diary/data,
-# Art: ~/open-agent-diary/data). Override with AGENTDIARY_DATA so one copy of
+# The diary data root differs per host. Override with AGENTDIARY_DATA so one copy of
 # this plugin works on every machine without per-host edits.
 _DIARY_DATA = os.environ.get("AGENTDIARY_DATA", "~/development/agent-diary/data")
 _TIMEOUT = 3.0
@@ -78,13 +77,13 @@ _NOISE_PREFIXES = (
     "[The user sent an image",
     "[IMPORTANT:",
     "[System note:",
-    "=== Alice",
+    "=== Assistant",
 )
 
 # Speaker labels that pollute raw transcript chunks. Stripped so recall shows
-# content, not "sampleuser: [tom]: ..." prefixes.
+# content, not "sampleuser: [assistant]: ..." prefixes.
 _SPEAKER_RE = re.compile(
-    r"\b(sampleuser|assistant|system|user)\s*:\s*|\[(tom|alice|bill)\]\s*:\s*",
+    r"\b(sampleuser|assistant|system|user)\s*:\s*",
     re.IGNORECASE,
 )
 

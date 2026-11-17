@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-**willproapps@gmail.com**.
+the maintainers via the repository's GitHub contact channels.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

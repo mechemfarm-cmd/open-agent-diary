@@ -11,9 +11,9 @@ and never belong in the portable repository.
 ```text
 GitHub main (canonical source)
         ↓
-clean Emily checkout (Tom's deployment)
+clean checkout on the first host
         ↓
-clean Art checkout (Alice's deployment)
+clean checkout on the second host
 ```
 
 The two deployed checkouts must identify the same Git commit as GitHub before
