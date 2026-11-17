@@ -308,7 +308,7 @@ the pressure the buffer is under. The result is therefore **host-wide buffer
 pressure under a known local workload** — never presented as loss attributable
 solely to the churn scope. `session.json` records `scoped_to` in those words.
 
-### The script refuses four ways of lying to itself
+### The script refuses five ways of lying to itself
 
 1. **A dead probe is not a quiet probe.** The window is polled once a second, so
    a probe that exits at second 5 is noticed at second 5, not at second 60. Early
@@ -322,11 +322,31 @@ solely to the churn scope. `session.json` records `scoped_to` in those words.
    followed by 55 seconds of Emily's own activity would look like a valid
    result. `workload_duration_s`, `workload_status` and `workload_died_at_s` are
    recorded separately from `probe_duration_s`.
-3. **A session where nothing ran is not a result.** The workload writes
+
+   The check also reads the process **state** from `/proc/<pid>/stat` and treats
+   `Z` (zombie) and `X` (dead) as not alive. `/proc/<pid>/stat` survives until a
+   zombie is reaped, and a zombie keeps both its PID and its start ticks, so an
+   identity-only check would report a stopped process as alive for as long as its
+   parent held it. Parsing is **comm-safe**: the comm field is parenthesised and
+   may itself contain spaces and parentheses, so the line is split after the last
+   `)` rather than on spaces — `cut -d' ' -f22` reads the wrong field for a
+   process whose name contains a space.
+3. **An alive workload that has stopped working is not a measurement either.**
+   Process identity does not imply progress. The workload appends
+   `<elapsed> <count>` to `rate.log` every 1000 opens, and the poll loop tracks
+   the last count it has seen. If that count does not advance for `STALL_LIMIT`
+   (10) seconds, the session is void and `workload_status` is `stalled` —
+   recording `workload_stalled_at_s`, `last_progress_at_s`, `last_progress_count`
+   and `last_progress_workload_elapsed_s`. Without this, a workload that reached
+   the gate, performed some opens and then blocked while staying alive would
+   still report a 60-second workload duration. Progress is only required once it
+   has started: a workload that has not yet published its first count is not
+   voided, and is caught by the zero-operation check below instead.
+4. **A session where nothing ran is not a result.** The workload writes
    `churn.ready` when it passes the gate and appends a running operation count.
    Both are checked; either missing or at zero voids the session. "The file
    exists" is not evidence the workload started.
-4. **Non-empty stderr is not loss.** Output is classified as `loss_reported`
+5. **Non-empty stderr is not loss.** Output is classified as `loss_reported`
    (with the count), `no_loss_reported`, `probe_error`, or
    `loss_mentioned_unparsed` — the last for text that mentions loss in a form the
    script does not recognise. That last case exists so an unfamiliar message is

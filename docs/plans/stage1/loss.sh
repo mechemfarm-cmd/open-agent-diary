@@ -22,6 +22,7 @@ SHEET_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_DIR="$SHEET_DIR/probes"
 DURATION=60
 RB_PAGES=2          # default is 64 per CPU on bpftrace 0.20.2 — 32x smaller here
+STALL_LIMIT=10      # seconds without a new published op count => stalled workload
 
 CAPTURE_ID="mp1-loss-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SCOPE="mp-stage1-loss-${CAPTURE_ID}"
@@ -158,23 +159,74 @@ read -r CHURN_PID CHURN_START_TICKS CHURN_STARTED_AT <"$SCRATCH/churn.identity"
 [ -n "${CHURN_PID:-}" ] || fail "churn identity has no pid"
 log "churn pid=$CHURN_PID start_ticks=$CHURN_START_TICKS"
 
+# Comm-safe read of /proc/<pid>/stat.
+#
+# The comm field is parenthesised and may itself contain spaces and parentheses,
+# so splitting the line on spaces is wrong: "field 22" by position is not the
+# start time once comm contains a space. Strip through the LAST ')' and index
+# from there — state is the first remaining field, starttime the twentieth.
+#   field 3  (state)     -> index 0
+#   field 22 (starttime) -> index 19
+read_proc_stat() {
+    local pid="$1" raw rest
+    raw="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 1
+    rest="${raw##*)}"
+    local -a f
+    read -r -a f <<<"$rest"
+    [ "${#f[@]}" -ge 20 ] || return 1
+    PROC_STATE="${f[0]}"
+    PROC_START_TICKS="${f[19]}"
+}
+
 workload_alive() {
     [ -n "${CHURN_PID:-}" ] || return 1
-    [ -r "/proc/$CHURN_PID/stat" ] || return 1
-    local now_ticks
-    now_ticks="$(cut -d' ' -f22 "/proc/$CHURN_PID/stat" 2>/dev/null)" || return 1
-    # Same PID, same start time: still our process, not a reused number.
-    [ "$now_ticks" = "$CHURN_START_TICKS" ]
+    read_proc_stat "$CHURN_PID" || return 1
+    # Identity: same PID and same start time — not a reused PID.
+    [ "$PROC_START_TICKS" = "$CHURN_START_TICKS" ] || return 1
+    # Liveness: /proc/<pid>/stat survives until a zombie is reaped, and a zombie
+    # keeps both its PID and its start ticks while no longer executing. An
+    # identity-only check would call that alive.
+    case "$PROC_STATE" in
+        Z | X) return 1 ;;
+    esac
+    return 0
+}
+
+# Latest operation count the workload has published. The workload appends
+# "<elapsed> <count>" to rate.log every 1000 opens, so a last line that stops
+# advancing means the process is alive but no longer doing work.
+latest_progress() {
+    [ -s "$SCRATCH/rate.log" ] || return 1
+    local line
+    line="$(tail -n 1 "$SCRATCH/rate.log" 2>/dev/null)" || return 1
+    [ -n "$line" ] || return 1
+    local -a f
+    read -r -a f <<<"$line"
+    [ "${#f[@]}" -ge 2 ] || return 1
+    PROGRESS_ELAPSED="${f[0]}"
+    PROGRESS_COUNT="${f[1]}"
+    return 0
 }
 
 # ------------------------------------------------------------------- window
 # Poll rather than sleep once, so either process dying is noticed within a
 # second rather than at the end of the minute.
+#
+# Identity is not enough on its own. A process can stay alive, keep its PID and
+# start ticks, and stop producing operations — the probe would then measure the
+# remainder of the window as host-only activity and still report a valid-looking
+# 60-second workload. So the loop also watches the workload's own published count
+# and voids the session if that count stops advancing.
 STARTED="$(date +%s)"
 PROBE_EXITED_EARLY=0
 EXITED_AT=""
 WORKLOAD_DIED=0
 WORKLOAD_DIED_AT=""
+WORKLOAD_STALLED=0
+WORKLOAD_STALLED_AT=""
+LAST_PROGRESS_AT=""
+LAST_PROGRESS_ELAPSED=""
+LAST_PROGRESS_COUNT=""
 ELAPSED=0
 while :; do
     ELAPSED=$(( $(date +%s) - STARTED ))
@@ -191,6 +243,20 @@ while :; do
         log "workload died at ${ELAPSED}s"
         break
     fi
+    if latest_progress; then
+        if [ "$PROGRESS_COUNT" != "$LAST_PROGRESS_COUNT" ]; then
+            LAST_PROGRESS_COUNT="$PROGRESS_COUNT"
+            LAST_PROGRESS_ELAPSED="$PROGRESS_ELAPSED"
+            LAST_PROGRESS_AT="$ELAPSED"
+        fi
+    fi
+    if [ -n "$LAST_PROGRESS_AT" ] \
+        && [ $(( ELAPSED - LAST_PROGRESS_AT )) -ge "$STALL_LIMIT" ]; then
+        WORKLOAD_STALLED=1
+        WORKLOAD_STALLED_AT="$ELAPSED"
+        log "workload stopped making progress at ${ELAPSED}s (last count ${LAST_PROGRESS_COUNT} at workload ${LAST_PROGRESS_ELAPSED}s)"
+        break
+    fi
     sleep 1
 done
 
@@ -199,6 +265,9 @@ done
 if [ "$WORKLOAD_DIED" -eq 1 ]; then
     WORKLOAD_DURATION="$WORKLOAD_DIED_AT"
     WORKLOAD_STATUS="exited_early"
+elif [ "$WORKLOAD_STALLED" -eq 1 ]; then
+    WORKLOAD_DURATION="$WORKLOAD_STALLED_AT"
+    WORKLOAD_STATUS="stalled"
 else
     WORKLOAD_DURATION="$ELAPSED"
     WORKLOAD_STATUS="running_at_window_end"
@@ -255,6 +324,10 @@ cat >"$SCRATCH/session.json" <<JSON
   "workload_duration_s": $WORKLOAD_DURATION,
   "workload_status": "$WORKLOAD_STATUS",
   "workload_died_at_s": $([ -n "$WORKLOAD_DIED_AT" ] && echo "$WORKLOAD_DIED_AT" || echo null),
+  "workload_stalled_at_s": $([ -n "$WORKLOAD_STALLED_AT" ] && echo "$WORKLOAD_STALLED_AT" || echo null),
+  "last_progress_at_s": $([ -n "$LAST_PROGRESS_AT" ] && echo "$LAST_PROGRESS_AT" || echo null),
+  "last_progress_count": $([ -n "$LAST_PROGRESS_COUNT" ] && echo "$LAST_PROGRESS_COUNT" || echo null),
+  "last_progress_workload_elapsed_s": $([ -n "$LAST_PROGRESS_ELAPSED" ] && echo "$LAST_PROGRESS_ELAPSED" || echo null),
   "churn_pid": $CHURN_PID,
   "churn_start_ticks": "$CHURN_START_TICKS",
   "churn_started_at": $CHURN_STARTED_AT,
@@ -274,6 +347,7 @@ sed 's/^/  /' "$SCRATCH/session.json" >&2
 [ "$CHURN_READY" -eq 1 ] || fail "churn workload never reached the gate — nothing was measured"
 [ "$TOTAL_OPS" -gt 0 ] || fail "churn workload recorded zero operations — nothing was measured"
 [ "$WORKLOAD_DIED" -eq 0 ] || fail "workload died at ${WORKLOAD_DIED_AT}s; the ${DURATION}s window was not observed"
+[ "$WORKLOAD_STALLED" -eq 0 ] || fail "workload stopped making progress at ${WORKLOAD_STALLED_AT}s (last count ${LAST_PROGRESS_COUNT}); the ${DURATION}s window was not observed"
 [ "$PROBE_EXITED_EARLY" -eq 0 ] || fail "probe exited early at ${EXITED_AT}s; the ${DURATION}s window was not observed"
 
 log "loss session complete; result at $RESULT_DIR"
