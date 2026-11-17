@@ -30,7 +30,7 @@ class TestBeliefRepository(unittest.TestCase):
         self.db_path = Path(self.tmp) / "index" / "memory.db"
         bootstrap_sqlite(self.db_path)
 
-    def _seed(self, belief=None, subject="Emily", predicate="RUNS_ON", obj="Hermes"):
+    def _seed(self, belief=None, subject="Workstation", predicate="RUNS_ON", obj="Hermes"):
         from agent_diary.models.types import GraphEntity, GraphFact, GraphFactEvidence
 
         s = GraphEntity(canonical_name=subject)
@@ -118,9 +118,9 @@ class TestBeliefRepository(unittest.TestCase):
 
     # ── candidates ───────────────────────────────────────────────────────────
     def test_load_candidates_returns_a_usable_statement(self):
-        fid = self._seed(subject="Emily", predicate="RUNS_ON", obj="Hermes")
+        fid = self._seed(subject="Workstation", predicate="RUNS_ON", obj="Hermes")
         cands = {c.fact_id: c for c in load_candidates(self.db_path)}
-        self.assertIn("Emily runs on Hermes", cands[fid].statement)
+        self.assertIn("Workstation runs on Hermes", cands[fid].statement)
 
     def test_fact_without_a_stored_belief_scores_zero_confidence(self):
         fid = self._seed()

@@ -156,7 +156,7 @@ class TestRenderBudget(unittest.TestCase):
         )
 
     def test_block_contains_the_statements(self):
-        self.assertIn("Art runs Alice", rk.render_block(rk.rank([cand("Art runs Alice", 0.9)])))
+        self.assertIn("Server runs Agent", rk.render_block(rk.rank([cand("Server runs Agent", 0.9)])))
 
     def test_provisional_is_marked(self):
         block = rk.render_block(rk.rank([cand("bulk derived", 0.9, provisional=True)]))

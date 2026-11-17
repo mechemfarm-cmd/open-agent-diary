@@ -46,7 +46,7 @@ class ResolvePathsTest(unittest.TestCase):
     def test_data_dir_is_used_as_the_data_root(self) -> None:
         """The live layout: the argument is the root, not a '<project>/data' child."""
         with tempfile.TemporaryDirectory() as tmp:
-            data_root = Path(tmp).resolve() / "share" / "agent-diary" / "emily"
+            data_root = Path(tmp).resolve() / "share" / "agent-diary" / "agent"
 
             paths = self.module.resolve_paths(str(data_root))
 

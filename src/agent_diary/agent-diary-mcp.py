@@ -311,7 +311,7 @@ TOOLS = {
         },
     },
     "graph_search": {
-        "description": "Search the knowledge graph across both entities and facts. Good for questions like 'what runs on Lucy?' or 'what does Bill own?'",
+        "description": "Search the knowledge graph across both entities and facts. Good for questions like 'what runs on the file server?' or 'who owns the backup job?'",
         "fn": graph_search,
         "parameters": {
             "query": {"type": "string", "description": "Search query"},
