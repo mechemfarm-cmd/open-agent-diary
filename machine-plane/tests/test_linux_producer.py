@@ -370,6 +370,53 @@ class LinuxEBPFProducerTest(unittest.TestCase):
         thread.join(timeout=5)
         self.assertIn("EV open", line)
         self.assertGreater(sum(len(chunk) for chunk in collected), 100000)
+        for stream in (child.stdout, child.stderr):
+            if stream is not None:
+                stream.close()
+
+    def test_stderr_is_attributed_to_the_probe_that_wrote_it(self) -> None:
+        """Three probes, three distinct errors: each must name its own.
+
+        The first version returned the first non-empty buffer regardless of which
+        process was asked about, so one probe's failure text could be reported
+        against another — and that text is the only clue to which probe misbehaved.
+        """
+        import subprocess
+        import sys
+
+        from machine_plane.producers.linux_ebpf import _collected_stderr, _drain
+
+        drains = []
+        children = []
+        for name in ("exec", "file", "net"):
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import sys; sys.stderr.write('probe {name} failed\\n'); "
+                    "sys.stderr.flush()",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            children.append(child)
+            thread, collected = _drain(child)
+            drains.append((child, thread, collected))
+
+        for child in children:
+            child.wait(timeout=15)
+        for _, thread, _ in drains:
+            thread.join(timeout=5)
+
+        for name, child in zip(("exec", "file", "net"), children):
+            text = _collected_stderr(child, drains)
+            self.assertIn(f"probe {name} failed", text)
+            for other in {"exec", "file", "net"} - {name}:
+                self.assertNotIn(f"probe {other} failed", text)
+            for stream in (child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
 
     def test_unsupported_raw_type_is_refused_rather_than_guessed(self) -> None:
         from machine_plane.producer import RawEvent

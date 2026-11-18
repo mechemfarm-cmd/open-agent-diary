@@ -243,7 +243,7 @@ class LinuxEBPFProducer(Producer):
         # One process per probe script. A single invocation given several scripts
         # runs only the first and silently ignores the rest.
         processes: list[subprocess.Popen[str]] = []
-        drains: list[tuple[threading.Thread, list[str]]] = []
+        drains: list[tuple[subprocess.Popen[str], threading.Thread, list[str]]] = []
         try:
             for path in self._probe_paths:
                 process = subprocess.Popen(
@@ -256,7 +256,8 @@ class LinuxEBPFProducer(Producer):
                 # Drain stderr continuously. Leaving it unread until the process
                 # exits deadlocks a chatty probe: the pipe buffer fills (~64 KiB)
                 # and bpftrace blocks writing to it while we block reading stdout.
-                drains.append(_drain(process))
+                thread, collected = _drain(process)
+                drains.append((process, thread, collected))
             # Interleave the probes as they arrive rather than draining one to
             # completion: the whole point of a shared monotonic timeline is that
             # the event order across probes is meaningful.
@@ -272,8 +273,9 @@ class LinuxEBPFProducer(Producer):
                 process.wait()
                 if process.returncode:
                     failures.append(f"{path}: {_collected_stderr(process, drains)}")
-            for thread, _ in drains:
+            for _, thread, _ in drains:
                 thread.join(timeout=2)
+            _close_pipes(processes)
             if failures:
                 raise RuntimeError("bpftrace exited non-zero: " + "; ".join(failures))
 
@@ -584,15 +586,35 @@ def _drain(process: subprocess.Popen[str]) -> tuple[threading.Thread, list[str]]
 
 
 def _collected_stderr(
-    process: subprocess.Popen[str], drains: list[tuple[threading.Thread, list[str]]]
+    process: subprocess.Popen[str],
+    drains: list[tuple[subprocess.Popen[str], threading.Thread, list[str]]],
 ) -> str:
-    """The drained stderr for ``process``, if it was drained at all."""
-    for thread, collected in drains:
+    """The drained stderr belonging to *this* process, and no other.
+
+    Keyed by process rather than taking the first non-empty buffer: with three
+    probes attached, a shared buffer would attribute one probe's error to another,
+    and the error text is the only thing that says which probe misbehaved.
+    """
+    for owner, thread, collected in drains:
+        if owner is not process:
+            continue
         if thread.is_alive():
             thread.join(timeout=1.0)
         if collected:
             return " ".join("".join(collected).split())[:200]
-    return "(no stderr captured)"
+        return "(no stderr captured)"
+    return "(probe was never started)"
+
+
+def _close_pipes(processes: Sequence[subprocess.Popen[str]]) -> None:
+    """Close the pipes we opened, so they are not left to the garbage collector."""
+    for process in processes:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
 
 def _interleave(streams: Sequence[IO[str]]) -> Iterator[str]:
