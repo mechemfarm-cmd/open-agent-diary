@@ -119,13 +119,68 @@ class LinuxEBPFProducerTest(unittest.TestCase):
         producer = self._producer()
         normalized = [producer.normalize(item) for item in producer.collect()]
         gaps = [event for event in normalized if event.type is EventType.UNSUPPORTED_KERNEL_FEATURE]
+        self.assertEqual(len(gaps), 2)
         for event in gaps:
             self.assertEqual(event.coverage_state, CoverageState.GAP)
-            note = event.coverage_note
-            self.assertIsNotNone(note)
-            assert note is not None  # narrowing for the type checker
-            self.assertTrue(note.scoped)
-            self.assertEqual(note.lost, 1)
+            self.assertIsNotNone(event.coverage_note)
+
+    def test_gap_subjects_are_ones_correlation_understands(self) -> None:
+        """A gap labelled with an invented name constrains nothing.
+
+        Correlation compares a gap's ``affected`` against a claim's subject, which
+        is an EventType value. The malformed *open* line must therefore name
+        read_attempt/write_attempt; the unrecognised rename line must be unscoped,
+        because its class is unknowable.
+        """
+        from machine_plane.events import EventType as ET
+
+        producer = self._producer()
+        gaps = [
+            event
+            for event in (producer.normalize(item) for item in producer.collect())
+            if event.type is ET.UNSUPPORTED_KERNEL_FEATURE
+        ]
+        subjects = {tuple(sorted(g.coverage_note.affected)) for g in gaps}
+        self.assertIn(("read_attempt", "write_attempt"), subjects)   # malformed open
+        self.assertIn((), subjects)                                   # unscoped rename
+        # Nothing invented: every scoped label is a real EventType value.
+        valid = {member.value for member in ET}
+        for gap in gaps:
+            for label in (gap.coverage_note.affected if gap.coverage_note else ()):
+                self.assertIn(label, valid, f"{label!r} is not a correlation subject")
+
+    def test_a_gap_actually_makes_a_claim_look_blind(self) -> None:
+        """The whole point: a scoped gap must change the coverage verdict.
+
+        The recorder is declared running first, otherwise everything is blind for
+        that reason and the gap's scoping would never be exercised — the test
+        would pass without the fix.
+        """
+        from machine_plane.correlation import CoverageMap
+        from machine_plane.testing import gap_event
+
+        producer = self._producer()
+        gaps = [
+            event
+            for event in (producer.normalize(item) for item in producer.collect())
+            if event.type is EventType.UNSUPPORTED_KERNEL_FEATURE
+        ]
+        started = producer.normalize(
+            gap_event(EventType.RECORDER_STARTED, wall_time=0.0, monotonic_time=0.0)
+        )
+
+        malformed = [g for g in gaps if g.coverage_note and g.coverage_note.affected][0]
+        coverage = CoverageMap.from_events([started, malformed])
+        moment = malformed.wall_time
+        self.assertTrue(coverage.recorder_running_at(moment))
+        self.assertTrue(coverage.is_blind(moment, affected="write_attempt"))
+        self.assertTrue(coverage.is_blind(moment, affected="read_attempt"))
+        self.assertFalse(coverage.is_blind(moment, affected="connect"))
+
+        unscoped = [g for g in gaps if not (g.coverage_note and g.coverage_note.affected)][0]
+        coverage2 = CoverageMap.from_events([started, unscoped])
+        self.assertTrue(coverage2.recorder_running_at(unscoped.wall_time))
+        self.assertTrue(coverage2.is_blind(unscoped.wall_time, affected="connect"))
 
     def test_identity_is_not_pid_alone_and_confidence_is_honest(self) -> None:
         """No start ticks means pid reuse cannot be excluded."""
@@ -196,6 +251,125 @@ class LinuxEBPFProducerTest(unittest.TestCase):
             for _, _, envelope in records:
                 self.assertEqual(envelope.recorder, "test-recorder")
                 self.assertNotIn("command_line", envelope.event["platform_details"])
+
+    # -- correlation seam (blocker: cgroup -> run) -----------------------
+
+    def test_scope_map_lets_an_event_correlate_with_a_run(self) -> None:
+        """The probe emits a cgroup inode; correlation matches on scope.
+
+        Without the supervisor's map, ``isolation_domain.scope`` is None and
+        ``RunRegistry.for_event`` can never match — the event is structurally
+        unmatchable no matter how correct everything else is.
+        """
+        from machine_plane.correlation import RunRegistration, RunRegistry
+
+        def producer_with(mapping):
+            handle = tempfile.NamedTemporaryFile(mode="w", delete=False)
+            handle.write(CAPTURE)
+            handle.close()
+            self.addCleanup(Path(handle.name).unlink)
+            return LinuxEBPFProducer(
+                captured_log_path=handle.name,
+                host_id="host-test",
+                boot_id="boot-test",
+                scope_by_cgroup=mapping,
+            )
+
+        registry = RunRegistry(
+            [
+                RunRegistration(
+                    capture_id="run-1",
+                    started_at=0.0,
+                    scope="agent-scope",
+                    boot_id="boot-test",
+                )
+            ]
+        )
+
+        # With the map: the event resolves to the registered run.
+        mapped = producer_with({"341251": "agent-scope"})
+        event = mapped.normalize(list(mapped.collect())[0])
+        self.assertIsNotNone(event.identity)
+        assert event.identity is not None and event.identity.isolation_domain is not None
+        self.assertEqual(event.identity.isolation_domain.scope, "agent-scope")
+        self.assertEqual(event.identity.isolation_domain.id, "341251")
+        self.assertEqual(
+            [r.capture_id for r in registry.for_event(event)], ["run-1"]
+        )
+
+        # Without it: unmatchable, which is the defect this map fixes.
+        unmapped = producer_with(None)
+        event = unmapped.normalize(list(unmapped.collect())[0])
+        self.assertEqual(registry.for_event(event), ())
+
+    # -- live-mode launch contract (warning: privilege) ------------------
+
+    def test_live_mode_refuses_to_run_unprivileged(self) -> None:
+        import os
+
+        producer = LinuxEBPFProducer(
+            probe_paths=["/tmp/nonexistent-probe.bt"],
+            scope_by_cgroup={"341251": "agent-scope"},
+        )
+        if os.geteuid() == 0:
+            self.skipTest("running as root: the unprivileged contract cannot be observed")
+        with self.assertRaises(PermissionError):
+            list(producer.collect())
+
+    def test_live_mode_refuses_without_a_scope_map(self) -> None:
+        """Without the map the run produces evidence that can never join."""
+        import os
+
+        producer = LinuxEBPFProducer(probe_paths=["/tmp/nonexistent-probe.bt"])
+        if os.geteuid() != 0:
+            self.skipTest("checks the map only once the privilege check passes")
+        with self.assertRaises(ValueError):
+            list(producer.collect())
+
+    # -- clocks and pipes (warnings) -------------------------------------
+
+    def test_gap_uses_the_kernel_clock_not_the_wall_clock(self) -> None:
+        producer = self._producer()
+        gaps = [
+            event
+            for event in (producer.normalize(item) for item in producer.collect())
+            if event.type is EventType.UNSUPPORTED_KERNEL_FEATURE
+        ]
+        for gap in gaps:
+            # Seconds since boot, not a Unix epoch; and consistent with its wall time.
+            self.assertLess(gap.monotonic_time, 1e7)
+            self.assertGreater(gap.wall_time, 1e9)
+
+    def test_a_chatty_probe_stderr_cannot_deadlock_the_reader(self) -> None:
+        """Unread stderr fills the pipe and blocks the child.
+
+        Reproduced at the helper level, because it needs no root: a child writing
+        200 KiB of stderr must still let us read its stdout to completion.
+        """
+        import subprocess
+        import sys
+
+        from machine_plane.producers.linux_ebpf import _drain
+
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys;"
+                "sys.stderr.write('x'*200000); sys.stderr.flush();"
+                "print('EV open pid=1 tid=1 rc=0 cgroup=1 ts=1000000000');"
+                "sys.stdout.flush()",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        thread, collected = _drain(child)
+        line = child.stdout.readline() if child.stdout else ""
+        child.wait(timeout=15)
+        thread.join(timeout=5)
+        self.assertIn("EV open", line)
+        self.assertGreater(sum(len(chunk) for chunk in collected), 100000)
 
     def test_unsupported_raw_type_is_refused_rather_than_guessed(self) -> None:
         from machine_plane.producer import RawEvent

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
@@ -54,6 +55,21 @@ from ..producer import Producer, RawEvent
 #: Sensor event names this producer understands. Anything else that presents as an
 #: event is reported as a gap rather than skipped.
 KNOWN_EVENT_NAMES = frozenset({"exec_attempt", "exec_started", "open", "connect"})
+
+#: Which correlation *subjects* each sensor event can produce.
+#:
+#: Correlation compares a gap's ``affected`` labels against a claim's subject,
+#: which is an ``EventType`` value (``exec``, ``write_attempt``, ``connect``, …) —
+#: see ``correlation._claim_subject``. A gap labelled with anything else is
+#: recorded but never matches, so it silently fails to constrain anything. A
+#: malformed line whose event *name* is readable is therefore scoped to the real
+#: subjects that class could have produced.
+EVENT_SUBJECTS: dict[str, tuple[str, ...]] = {
+    "exec_attempt": ("exec",),
+    "exec_started": ("exec",),
+    "open": ("read_attempt", "write_attempt"),
+    "connect": ("connect",),
+}
 
 #: Fields that must be present and well-formed on every event line.
 REQUIRED_FIELDS = ("ts", "pid", "tid", "cgroup")
@@ -88,6 +104,7 @@ class LinuxEBPFProducer(Producer):
         bpftrace: str = "bpftrace",
         host_id: str = "unknown-host",
         boot_id: str = "unknown-boot",
+        scope_by_cgroup: dict[str | int, str] | None = None,
         wall_clock_origin: float | None = None,
         policy=None,
     ) -> None:
@@ -99,12 +116,25 @@ class LinuxEBPFProducer(Producer):
         self._bpftrace = bpftrace
         self._host_id = host_id
         self._boot_id = boot_id
+        #: Supervisor-provided map of cgroup inode -> scope name.
+        #:
+        #: The probes emit the cgroup *inode*; correlation matches runs on
+        #: ``isolation_domain.scope``. Without this map every event is
+        #: structurally unmatchable, so the supervisor that launches the scope has
+        #: to hand its name over — it already knows it, and it is the only party
+        #: that can.
+        self._scope_by_cgroup = {
+            str(cgroup): scope for cgroup, scope in (scope_by_cgroup or {}).items()
+        }
         #: Wall clock paired with the first monotonic timestamp seen, used to give
         #: events a real wall time without pretending the kernel emitted one.
         self._wall_clock_origin = (
             wall_clock_origin if wall_clock_origin is not None else time.time()
         )
         self._monotonic_origin: float | None = None
+        #: Last kernel timestamp seen, so a gap lands beside the events it spoiled
+        #: instead of at a wall-clock instant in a different clock.
+        self._last_monotonic: float = 0.0
         self._unparsed = 0
         self._capabilities = self._build_capabilities()
 
@@ -168,6 +198,36 @@ class LinuxEBPFProducer(Producer):
 
     # -- collect ---------------------------------------------------------
 
+    def require_live_prerequisites(self) -> None:
+        """Check that this process can actually attach the probes.
+
+        Attaching needs root: on the hosts this was evaluated on
+        ``unprivileged_bpf_disabled=2`` and ``perf_event_paranoid=4``, so an
+        ordinary agent process cannot attach at all. That is a launch contract, not
+        a detail — the recorder runs privileged, and calling this from an
+        unprivileged process should say so plainly instead of surfacing as an
+        opaque bpftrace failure later.
+
+        The scope map is required for the same reason: without it, every event is
+        structurally unmatchable by correlation, and the run would produce
+        evidence that can never join to an agent claim.
+        """
+        import os
+
+        if os.geteuid() != 0:
+            raise PermissionError(
+                "live capture requires a privileged recorder: bpftrace cannot "
+                "attach as an unprivileged process on this host "
+                "(unprivileged_bpf_disabled / perf_event_paranoid). Run the "
+                "recorder under the supervisor that owns the scope."
+            )
+        if not self._scope_by_cgroup:
+            raise ValueError(
+                "live capture requires scope_by_cgroup: the probes emit the cgroup "
+                "inode, but correlation matches runs on isolation_domain.scope. "
+                "Without the map every event is unmatchable."
+            )
+
     def collect(self) -> Iterable[RawEvent]:
         """Yield parsed events from a captured log, or from live probes."""
         if self._captured_log_path is not None:
@@ -178,19 +238,25 @@ class LinuxEBPFProducer(Producer):
         if not self._probe_paths:
             raise ValueError("probe_paths are required unless captured_log_path is set")
 
+        self.require_live_prerequisites()
+
         # One process per probe script. A single invocation given several scripts
         # runs only the first and silently ignores the rest.
         processes: list[subprocess.Popen[str]] = []
+        drains: list[tuple[threading.Thread, list[str]]] = []
         try:
             for path in self._probe_paths:
-                processes.append(
-                    subprocess.Popen(
-                        [self._bpftrace, path],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
+                process = subprocess.Popen(
+                    [self._bpftrace, path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
                 )
+                processes.append(process)
+                # Drain stderr continuously. Leaving it unread until the process
+                # exits deadlocks a chatty probe: the pipe buffer fills (~64 KiB)
+                # and bpftrace blocks writing to it while we block reading stdout.
+                drains.append(_drain(process))
             # Interleave the probes as they arrive rather than draining one to
             # completion: the whole point of a shared monotonic timeline is that
             # the event order across probes is meaningful.
@@ -205,8 +271,9 @@ class LinuxEBPFProducer(Producer):
             for path, process in zip(self._probe_paths, processes):
                 process.wait()
                 if process.returncode:
-                    stderr = process.stderr.read() if process.stderr else ""
-                    failures.append(f"{path}: {stderr.strip()[:200]}")
+                    failures.append(f"{path}: {_collected_stderr(process, drains)}")
+            for thread, _ in drains:
+                thread.join(timeout=2)
             if failures:
                 raise RuntimeError("bpftrace exited non-zero: " + "; ".join(failures))
 
@@ -225,16 +292,30 @@ class LinuxEBPFProducer(Producer):
             self._monotonic_origin = monotonic_seconds
         return self._wall_clock_origin + (monotonic_seconds - self._monotonic_origin)
 
-    def _gap(self, reason: str, affected: str, lost: int = 1) -> RawEvent:
-        """Build a gap event. An unreadable line is not silence."""
+    def _gap(
+        self, reason: str, affected: tuple[str, ...] = (), lost: int = 1
+    ) -> RawEvent:
+        """Build a gap event. An unreadable line is not silence.
+
+        ``affected`` must be correlation *subjects* (EventType values) to have any
+        effect. When the line's class is unknowable — it could not be tokenised, or
+        carried an event name this producer does not recognise — the gap is left
+        **unscoped**, which correlation treats as applying to everything. That
+        over-reports, but the alternative is recording a gap that constrains
+        nothing at all.
+        """
         self._unparsed += lost
+        # Monotonic and wall time are different clocks. A gap lands beside the
+        # events it spoiled; using the wall clock here would place it in 1970
+        # relative to every other event.
+        moment = self._last_monotonic
         return RawEvent(
             EventType.UNSUPPORTED_KERNEL_FEATURE,
-            self._wall_clock_origin,
-            self._wall_clock_origin,
+            moment,
+            self._wall_time_for(moment),
             result=reason,
             details={"reason": reason},
-            coverage_note=CoverageNote(affected=(affected,), lost=lost),
+            coverage_note=CoverageNote(affected=affected, lost=lost),
         )
 
     def _parse_lines(self, lines: Iterable[str]) -> Iterator[RawEvent]:
@@ -253,14 +334,14 @@ class LinuxEBPFProducer(Producer):
                 fields = shlex.split(stripped)
             except ValueError:
                 # Unbalanced quoting: shlex cannot tokenise it at all.
-                yield self._gap("unparseable line", "unparsed_event_line")
+                yield self._gap("unparseable line")
                 continue
             if not fields or fields[0] != "EV":
                 # MARK lines and the "Attaching N probes..." banner are expected.
                 continue
 
             if len(fields) < 2:
-                yield self._gap("event line has no event name", "unparsed_event_line")
+                yield self._gap("event line has no event name")
                 continue
             event_name = fields[1]
 
@@ -272,16 +353,14 @@ class LinuxEBPFProducer(Producer):
                 values[key] = value
 
             if event_name not in KNOWN_EVENT_NAMES:
-                yield self._gap(
-                    f"unrecognised sensor event {event_name!r}", "unrecognised_event"
-                )
+                yield self._gap(f"unrecognised sensor event {event_name!r}")
                 continue
 
             missing = [name for name in REQUIRED_FIELDS if name not in values]
             if missing:
                 yield self._gap(
                     f"event {event_name!r} missing {','.join(missing)}",
-                    "malformed_event",
+                    EVENT_SUBJECTS.get(event_name, ()),
                 )
                 continue
 
@@ -292,10 +371,11 @@ class LinuxEBPFProducer(Producer):
             except ValueError:
                 yield self._gap(
                     f"event {event_name!r} has non-numeric identity fields",
-                    "malformed_event",
+                    EVENT_SUBJECTS.get(event_name, ()),
                 )
                 continue
 
+            self._last_monotonic = timestamp
             wall_time = self._wall_time_for(timestamp)
             details: dict = {
                 "pid": pid,
@@ -364,12 +444,27 @@ class LinuxEBPFProducer(Producer):
         the isolation domain and boot id are part of what makes the identifier
         mean anything. Start time is not available and is left unset rather than
         guessed.
+
+        ``scope`` is the field correlation actually matches a run on
+        (``RunRegistry.for_event`` reads ``isolation_domain.scope``, not ``.id``).
+        The probe only emits the cgroup *inode*, so the scope name comes from the
+        supervisor's map. When it is absent, ``scope`` stays ``None`` and the
+        event cannot match anything by scope — which is the truth, and is why
+        live mode requires the map.
         """
         details = raw.details or {}
         pid = details.get("pid", "unknown")
         cgroup = details.get("cgroup")
+        scope = (
+            self._scope_by_cgroup.get(str(cgroup)) if cgroup is not None else None
+        )
         domain = (
-            IsolationDomain(type=DomainType.CGROUP, id=str(cgroup), platform="linux")
+            IsolationDomain(
+                type=DomainType.CGROUP,
+                id=str(cgroup),
+                scope=scope,
+                platform="linux",
+            )
             if cgroup is not None
             else None
         )
@@ -462,6 +557,42 @@ class LinuxEBPFProducer(Producer):
     def unparsed_lines(self) -> int:
         """How many lines could not be read. Reported, never swallowed."""
         return self._unparsed
+
+
+def _drain(process: subprocess.Popen[str]) -> tuple[threading.Thread, list[str]]:
+    """Read a process's stderr on a thread, keeping only a bounded tail.
+
+    A probe's stderr is normally a few lines, but leaving the pipe unread until
+    the process exits deadlocks as soon as it writes more than the pipe buffer:
+    the child blocks on write while the parent blocks on stdout. Bounded so a
+    runaway probe cannot exhaust memory either.
+    """
+    collected: list[str] = []
+
+    def _read() -> None:
+        stream = process.stderr
+        if stream is None:
+            return
+        for line in stream:
+            collected.append(line)
+            if len(collected) > 200:
+                del collected[:100]
+
+    thread = threading.Thread(target=_read, daemon=True)
+    thread.start()
+    return thread, collected
+
+
+def _collected_stderr(
+    process: subprocess.Popen[str], drains: list[tuple[threading.Thread, list[str]]]
+) -> str:
+    """The drained stderr for ``process``, if it was drained at all."""
+    for thread, collected in drains:
+        if thread.is_alive():
+            thread.join(timeout=1.0)
+        if collected:
+            return " ".join("".join(collected).split())[:200]
+    return "(no stderr captured)"
 
 
 def _interleave(streams: Sequence[IO[str]]) -> Iterator[str]:
