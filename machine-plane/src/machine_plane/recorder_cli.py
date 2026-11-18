@@ -25,6 +25,7 @@ from .containment import (
     write_consent,
 )
 from .privacy_gate import run_gate
+from .privacy_scan import gate2
 from .recorder import Recorder, RecorderConfig, RunResult, recover_torn_tails
 from .retention import RetentionJournal
 from .supervisor import SystemdSupervisor, current_boot_id, require_root
@@ -72,7 +73,7 @@ def _producer_module() -> Path:
     return Path(machine_plane.__file__).parent / "producers" / "linux_ebpf.py"
 
 
-def _gate(config: RecorderConfig) -> int:
+def _gate(config: RecorderConfig):
     """Gate 1, before anything is installed or attached.
 
     Run before consent is written and before a probe exists: a dereference that
@@ -80,7 +81,11 @@ def _gate(config: RecorderConfig) -> int:
     """
     result = run_gate(list(config.probes), producer_module=_producer_module())
     print(result.report())
-    return 0 if result.passed else 1
+    return (0 if result.passed else 1), result.fields
+
+
+def _gate_code(config: RecorderConfig) -> int:
+    return _gate(config)[0]
 
 
 
@@ -104,7 +109,7 @@ def _build_config(args) -> RecorderConfig:
 
 def _install(args) -> int:
     if args.gate:
-        if _gate(_build_config(args)) != 0:
+        if _gate_code(_build_config(args)) != 0:
             print("\nrefusing to install: Gate 1 failed", file=sys.stderr)
             return 1
     detection, error = _detect_or_error(args.agent_account)
@@ -261,7 +266,8 @@ def _status(args) -> int:
 
 def _record(args) -> int:
     require_root("recorder")
-    if _gate(_build_config(args)) != 0:
+    gate_code, probe_fields = _gate(_build_config(args))
+    if gate_code != 0:
         print("\nrefusing to attach: Gate 1 failed", file=sys.stderr)
         return 1
     config = _build_config(args)
@@ -314,6 +320,23 @@ def _record(args) -> int:
         print(f"dropped   : {', '.join(result.dropped)}")
     if result.error:
         print(f"error     : {result.error}", file=sys.stderr)
+
+    # Gate 2 after sealing, while the recorder still has write access. A segment
+    # that fails is renamed out of the importable namespace immediately, so it
+    # cannot be ingested by anyone who runs the importer first.
+    if result.ok and result.segment is not None:
+        scan = gate2(
+            result.segment,
+            recorder_id=config.recorder_id,
+            probe_fields=probe_fields,
+        )
+        print(scan.report())
+        if not scan.passed:
+            voided = result.segment.with_name(result.segment.name + ".voided")
+            result.segment.rename(voided)
+            print(f"voided    : {voided} — this segment will not be imported",
+                  file=sys.stderr)
+            return 8
     return result.exit_code
 
 

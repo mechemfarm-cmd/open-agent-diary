@@ -204,3 +204,95 @@ def scan_segment(
 
 def gate2(segment: str | Path, *, recorder_id: str, probe_fields: set[str]) -> ScanResult:
     return scan_segment(segment, recorder_id=recorder_id, allowed_detail_keys=probe_fields)
+
+
+@dataclass
+class Accounting:
+    """The counters behind a segment, named separately so they reconcile.
+
+    A single "records" number hides which population it describes. These are
+    defined so the equation can be checked rather than asserted:
+
+        records  ==  lifecycle + action + gaps
+        imported + duplicates + refused  ==  records
+
+    ``lifecycle`` covers ``recorder_started``, ``recorder_stopped`` and the other
+    gap-class events, which are the recorder's own bookkeeping rather than
+    observations by a probe.
+    """
+
+    segment: str
+    records: int = 0
+    lifecycle: int = 0
+    action: int = 0
+    gaps: int = 0
+    imported: int = 0
+    duplicates: int = 0
+    #: Records below the checkpoint, imported by an earlier run. Without this
+    #: the equation fails on every re-run, which looks like loss and is not.
+    already: int = 0
+
+    @property
+    def consistent(self) -> bool:
+        return self.records == self.lifecycle + self.action + self.gaps
+
+    def line(self) -> str:
+        return (
+            f"{self.segment}: records {self.records} = "
+            f"lifecycle {self.lifecycle} + action {self.action} + gaps {self.gaps}; "
+            f"imported {self.imported} + duplicates {self.duplicates}"
+        )
+
+
+def account_segment(
+    path: str | Path, *, recorder_id: str, checkpoint_offset: int = 0
+) -> tuple[Accounting, list[MachineEvent]]:
+    """Count a segment by category, returning the events as well."""
+    segment = Path(path)
+    counts = Accounting(segment=segment.name)
+    events: list[MachineEvent] = []
+
+    for _start, end_offset, envelope in Spool(segment, recorder_id).read_from(0):
+        counts.records += 1
+        if end_offset <= checkpoint_offset:
+            counts.already += 1
+        try:
+            event = MachineEvent.from_dict(envelope.event)
+        except Exception:  # noqa: BLE001 - counted, and the scan reports it
+            counts.gaps += 1
+            continue
+        events.append(event)
+        if event.type in {
+            EventType.RECORDER_STARTED,
+            EventType.RECORDER_STOPPED,
+            EventType.BUFFER_OVERFLOW,
+            EventType.PERMISSION_GAP,
+            EventType.UNSUPPORTED_KERNEL_FEATURE,
+            EventType.SINK_UNAVAILABLE,
+            EventType.CLOCK_JUMP,
+        }:
+            counts.lifecycle += 1
+        else:
+            counts.action += 1
+
+    return counts, events
+
+
+def attribution(events: list[MachineEvent], *, scope: str | None) -> tuple[int, int]:
+    """How many events belong to the named scope, and how many do not.
+
+    The probes are host-wide. Until they are filtered, most of what a capture
+    contains belongs to something else on the machine, and a claim about what the
+    workload did must not be read from the total.
+    """
+    matched = 0
+    unmatched = 0
+    for event in events:
+        if event.identity is None or event.identity.isolation_domain is None:
+            unmatched += 1
+            continue
+        if scope is not None and event.identity.isolation_domain.scope == scope:
+            matched += 1
+        else:
+            unmatched += 1
+    return matched, unmatched

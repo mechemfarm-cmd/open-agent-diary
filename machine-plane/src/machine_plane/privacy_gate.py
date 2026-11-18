@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from collections.abc import Sequence
 from pathlib import Path
 
 #: The single approved pathname dereference, matched exactly.
@@ -230,7 +231,7 @@ class GateResult:
 
 
 def run_gate(
-    probes: list[str | Path],
+    probes: Sequence[str | Path],
     *,
     producer_module: str | Path,
     expected_fields: set[str] | None = None,
