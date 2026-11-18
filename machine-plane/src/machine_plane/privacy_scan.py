@@ -261,6 +261,7 @@ def account_segment(
     # The run's own header carries the join key.
     scope_inode: str | None = None
     header_scope: str | None = None
+    header_mode: str | None = None
     for event in parsed:
         if event.type is EventType.RECORDER_STARTED:
             details = dict(event.platform_details)
@@ -280,6 +281,7 @@ def account_segment(
     counts = Counts(
         scope_in_segment=scope_inode,
         scope_requested=expected_scope is not None,
+        capture_mode=header_mode or "filtered",
     )
     counts.gaps += unreadable
     counts.unreadable += unreadable
