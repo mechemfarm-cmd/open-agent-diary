@@ -5,6 +5,26 @@ dereference. So this inspects the probe sources as artifacts, on the machine,
 before installation and before every attach, and refuses when the sources ask the
 kernel for more than the approved set.
 
+**This is a verifier for one fixed artifact grammar, not a bpftrace parser.**
+It is written against probe sources that follow a single shape, and it refuses
+anything outside that shape rather than guessing:
+
+    <specifier> [ /filter/ ] {
+        printf("<literal format>", <arg>, <arg>, ...);
+    }
+
+    specifier := BEGIN | END | tracepoint:<group>:<name> | kprobe:<symbol> ...
+    format    := "MARK probe=<name> phase=<phase> ts=%llu"
+               | "EV <event> name=<value> ..."     (name=value pairs, %d/%s/%llu)
+    arg       := identifier | args-><field> | args->ret | nsecs | comm | cgroup
+               | str(<pointer>) | pid | tid
+
+Anything with preprocessor directives, wildcard specifiers, or a printf whose
+format is not a leading string literal is **rejected**, because a verifier that
+guesses at syntax it does not understand is worse than one that refuses. If the
+probe set ever needs a richer grammar, this module needs extending deliberately —
+not silently absorbing whatever it is given.
+
 Four rules, each from the design's path-privacy section:
 
 1. **Every emitted field is enumerated from the probe source**, not from a
@@ -59,6 +79,14 @@ FORBIDDEN_TOKENS = (
     "user_str",
     "buf(",
 )
+
+#: Constructs this verifier does not interpret. Presence means the source is
+#: outside the artifact grammar, so its safety cannot be established here.
+UNSUPPORTED_PATTERNS = {
+    "preprocessor directive": re.compile(r"^\s*#\s*(define|include|pragma|import)\b", re.MULTILINE),
+    "wildcard specifier": re.compile(r"^\s*(kprobe|kretprobe|tracepoint|uprobe|usdt):\S*\*", re.MULTILINE),
+    "multiple statements per printf": re.compile(r"printf\s*\([^;]*\)\s*;\s*printf", re.DOTALL),
+}
 
 _COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT = re.compile(r"//[^\n]*")
@@ -138,8 +166,20 @@ def _split_arguments(body: str) -> list[str]:
 
 def inspect_probe(path: str | Path) -> ProbeInspection:
     target = Path(path)
-    source = _strip_comments(target.read_text(encoding="utf-8"))
+    raw = target.read_text(encoding="utf-8")
+    source = _strip_comments(raw)
     inspection = ProbeInspection(name=target.name)
+
+    for label, pattern in UNSUPPORTED_PATTERNS.items():
+        match = pattern.search(source)
+        if match is not None:
+            inspection.findings.append(
+                Finding(
+                    target.name,
+                    "unsupported-syntax",
+                    f"{label} at {match.group(0)[:40]!r} — outside the artifact grammar",
+                )
+            )
 
     for call in _PRINTF.finditer(source):
         specifier = _enclosing_specifier(source, call.start())
@@ -155,7 +195,13 @@ def inspect_probe(path: str | Path) -> ProbeInspection:
             continue
 
         text = literal.group("text")
-        inspection.fields.update(re.findall(r"(\w+)=", text))
+        names = re.findall(r"(\w+)=", text)
+        if not names:
+            inspection.findings.append(
+                Finding(target.name, "unparsed-format", text[:60])
+            )
+            continue
+        inspection.fields.update(names)
         for marker in re.findall(r"^EV\s+(\w+)", text):
             inspection.events.add(marker)
 

@@ -10,17 +10,33 @@
 #   20. the importer account cannot write the spool
 #   21. the agent's account cannot read the spool at all
 #   22. the importer never reads a .partial
+#
+# Writes a retained JSON artifact (default /var/lib/machine-plane/acceptance/) so
+# the result is evidence rather than a transcript somebody has to remember.
 set -uo pipefail
 
 SPOOL="${SPOOL:-/var/lib/machine-plane/spool}"
 IMPORTER="${IMPORTER:-mp-import}"
 AGENT="${AGENT:?set AGENT to the account the agent runs as}"
 STORE="${STORE:-/var/lib/machine-plane/store/events.ndjson}"
+OUT_DIR="${OUT_DIR:-/var/lib/machine-plane/acceptance}"
+JSON_OUT="${1:-$OUT_DIR/ownership-$(hostname -s)-$(date -u +%Y%m%dT%H%M%SZ).json}"
+
+RESULTS="$(mktemp)"
+trap 'rm -f "$RESULTS"' EXIT
 
 failures=0
-note() { printf '  %-52s %s\n' "$1" "$2"; }
-pass() { note "$1" "PASS ($2)"; }
-fail() { note "$1" "FAIL ($2)"; failures=$((failures + 1)); }
+
+# record <check> <expected> <observed> <pass|fail>
+record() {
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$RESULTS"
+    if [ "$4" = "pass" ]; then
+        printf '  %-52s PASS (%s)\n' "$1" "$2"
+    else
+        printf '  %-52s FAIL (expected %s, observed %s)\n' "$1" "$2" "$3"
+        failures=$((failures + 1))
+    fi
+}
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 2; }
 
@@ -33,56 +49,56 @@ fi
 echo "=== 19/20: $IMPORTER (read-only, in mp-read) ==="
 
 if sudo -u "$IMPORTER" head -c 200 "$segment" >/dev/null 2>&1; then
-    pass "read a sealed segment" "allowed, as intended"
+    record "read a sealed segment" "permitted" "permitted" pass
 else
-    fail "read a sealed segment" "denied — the importer cannot read its input"
+    record "read a sealed segment" "permitted" "denied" fail
 fi
 
 if sudo -u "$IMPORTER" sh -c 'printf x >> "$1"' _ "$segment" 2>/dev/null; then
-    fail "append to a sealed segment" "WROTE — the boundary is broken"
+    record "append to a sealed segment" "denied" "permitted" fail
 else
-    pass "append to a sealed segment" "denied"
+    record "append to a sealed segment" "denied" "denied" pass
 fi
 
 if sudo -u "$IMPORTER" sh -c ': > "$1"' _ "$segment" 2>/dev/null; then
-    fail "truncate a sealed segment" "TRUNCATED — the boundary is broken"
+    record "truncate a sealed segment" "denied" "permitted" fail
 else
-    pass "truncate a sealed segment" "denied"
+    record "truncate a sealed segment" "denied" "denied" pass
 fi
 
 if sudo -u "$IMPORTER" mv "$segment" "$segment.moved" 2>/dev/null; then
     mv "$segment.moved" "$segment"
-    fail "rename a sealed segment" "RENAMED — the boundary is broken"
+    record "rename a sealed segment" "denied" "permitted" fail
 else
-    pass "rename a sealed segment" "denied"
+    record "rename a sealed segment" "denied" "denied" pass
 fi
 
 if sudo -u "$IMPORTER" rm -f "$segment" 2>/dev/null; then
-    fail "delete a sealed segment" "DELETED — the boundary is broken"
+    record "delete a sealed segment" "denied" "deleted" fail
 else
-    pass "delete a sealed segment" "denied"
+    record "delete a sealed segment" "denied" "denied" pass
 fi
 
 if sudo -u "$IMPORTER" sh -c 'printf x > "$1/new-from-importer"' _ "$SPOOL" 2>/dev/null; then
     rm -f "$SPOOL/new-from-importer"
-    fail "create a file in the spool" "CREATED — the boundary is broken"
+    record "create a file in the spool" "denied" "permitted" fail
 else
-    pass "create a file in the spool" "denied"
+    record "create a file in the spool" "denied" "denied" pass
 fi
 
 echo
 echo "=== 21: $AGENT (the agent, not in mp-read) ==="
 
 if sudo -u "$AGENT" head -c 200 "$segment" >/dev/null 2>&1; then
-    fail "read a sealed segment as the agent" "ALLOWED — the agent can read the spool"
+    record "read a sealed segment as the agent" "denied" "permitted" fail
 else
-    pass "read a sealed segment as the agent" "denied"
+    record "read a sealed segment as the agent" "denied" "denied" pass
 fi
 
 if sudo -u "$AGENT" ls "$SPOOL" >/dev/null 2>&1; then
-    fail "list the spool as the agent" "ALLOWED — the agent can enumerate it"
+    record "list the spool as the agent" "denied" "permitted" fail
 else
-    pass "list the spool as the agent" "denied"
+    record "list the spool as the agent" "denied" "denied" pass
 fi
 
 echo
@@ -94,17 +110,67 @@ chgrp mp-read "$partial" 2>/dev/null || true
 chmod 0640 "$partial"
 
 before=$(wc -l <"$STORE" 2>/dev/null || echo 0)
-if sudo -u "$IMPORTER" machine-plane-import --spool "$SPOOL" --store "$STORE" >/dev/null 2>&1; then
-    after=$(wc -l <"$STORE" 2>/dev/null || echo 0)
-    if [ "$before" = "$after" ]; then
-        pass "importer ignores a live .partial" "store unchanged ($after records)"
-    else
-        fail "importer ignores a live .partial" "store grew $before -> $after"
-    fi
+# The property under test is that a .partial is never ingested, so the assertion
+# is the store's line count. The importer's exit code is deliberately not part of
+# it: a refused segment elsewhere in the spool makes a non-zero exit correct.
+sudo -u "$IMPORTER" machine-plane-import --spool "$SPOOL" --store "$STORE" >/dev/null 2>&1
+after=$(wc -l <"$STORE" 2>/dev/null || echo 0)
+if [ "$before" = "$after" ]; then
+    record "importer ignores a live .partial" "store unchanged" "unchanged" pass
 else
-    fail "importer ignores a live .partial" "import exited non-zero"
+    record "importer ignores a live .partial" "store unchanged" "grew" fail
 fi
 rm -f "$partial"
+
+# -- retained artifact -------------------------------------------------------
+
+mkdir -p "$(dirname "$JSON_OUT")" 2>/dev/null || true
+python3 - "$RESULTS" "$JSON_OUT" "$SPOOL" "$IMPORTER" "$AGENT" "$segment" "$failures" <<'PY'
+import json, os, pwd, sys, time
+
+results_path, out_path, spool, importer, agent, segment, failures = sys.argv[1:8]
+
+
+def identity(name):
+    try:
+        entry = pwd.getpwnam(name)
+        return {"account": name, "uid": entry.pw_uid, "gid": entry.pw_gid}
+    except KeyError:
+        return {"account": name, "uid": None, "gid": None}
+
+
+def mode_of(path):
+    try:
+        return oct(os.stat(path).st_mode & 0o7777)
+    except OSError:
+        return None
+
+
+checks = []
+with open(results_path, encoding="utf-8") as handle:
+    for line in handle:
+        check, expected, observed, status = line.rstrip("\n").split("\t")
+        checks.append(
+            {"check": check, "expected": expected, "observed": observed, "status": status}
+        )
+
+payload = {
+    "artifact": "machine-plane-ownership-acceptance",
+    "version": 1,
+    "host": os.uname().nodename,
+    "recorded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "spool": {"path": spool, "mode": mode_of(spool)},
+    "segment": {"name": os.path.basename(segment), "mode": mode_of(segment)},
+    "identities": {"importer": identity(importer), "agent": identity(agent)},
+    "checks": checks,
+    "failures": int(failures),
+    "passed": int(failures) == 0,
+}
+with open(out_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+print(f"artifact : {out_path}")
+PY
 
 echo
 if [ "$failures" -eq 0 ]; then

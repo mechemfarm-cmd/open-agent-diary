@@ -125,6 +125,102 @@ class TestCommentHandling(GateTestCase):
         self.assertEqual(result.dereferences, set())
 
 
+class TestArtifactGrammar(unittest.TestCase):
+    """The verifier refuses syntax outside the grammar rather than guessing."""
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="mp-grammar-"))
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self.directory, ignore_errors=True)
+        )
+
+    def write(self, name: str, source: str) -> Path:
+        path = self.directory / name
+        path.write_text(source, encoding="utf-8")
+        return path
+
+    def rules(self, source: str, name: str = "probe.bt") -> set[str]:
+        return {finding.rule for finding in inspect_probe(self.write(name, source)).findings}
+
+    def test_a_preprocessor_directive_is_refused(self) -> None:
+        self.assertIn("unsupported-syntax", self.rules("#define N 10\n" + GOOD_PROBE))
+
+    def test_a_wildcard_specifier_is_refused(self) -> None:
+        source = 'tracepoint:syscalls:sys_enter_* { printf("EV x pid=%d\\n", pid); }'
+        self.assertIn("unsupported-syntax", self.rules(source))
+
+    def test_a_format_with_no_fields_is_refused(self) -> None:
+        source = 'BEGIN { printf("hello\\n"); }'
+        self.assertIn("unparsed-format", self.rules(source))
+
+    def test_a_non_literal_format_is_refused(self) -> None:
+        source = 'BEGIN { printf(fmt, pid); }'
+        self.assertIn("unreadable-format", self.rules(source))
+
+
+class TestApprovedDereferenceIsExact(unittest.TestCase):
+    """The approval is for one expression in one block, not for a token.
+
+    A test that only proves the approved token *exists* would pass even if the
+    matcher were matching the token anywhere.
+    """
+
+    APPROVED_EXPRESSION = "str(args->filename)"
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="mp-approved-"))
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self.directory, ignore_errors=True)
+        )
+
+    def write(self, name: str, source: str) -> Path:
+        return Path(self.write_raw(name, source))
+
+    def write_raw(self, name: str, source: str) -> str:
+        path = self.directory / name
+        path.write_text(source, encoding="utf-8")
+        return str(path)
+
+    def test_the_approved_expression_in_the_approved_block_is_allowed(self) -> None:
+        source = (
+            "tracepoint:sched:sched_process_exec\n{\n"
+            f'    printf("EV exec_started pid=%d path=%s\\n", pid, {self.APPROVED_EXPRESSION});\n'
+            "}\n"
+        )
+        inspection = inspect_probe(self.write("exec.bt", source))
+        self.assertFalse(
+            any(f.rule == "unapproved-dereference" for f in inspection.findings),
+            [str(f) for f in inspection.findings],
+        )
+        self.assertEqual(
+            inspection.dereferences,
+            {("tracepoint:sched:sched_process_exec", self.APPROVED_EXPRESSION)},
+        )
+
+    def test_the_same_expression_in_a_different_tracepoint_is_refused(self) -> None:
+        source = (
+            "tracepoint:syscalls:sys_enter_openat\n{\n"
+            f'    printf("EV open pid=%d path=%s\\n", pid, {self.APPROVED_EXPRESSION});\n'
+            "}\n"
+        )
+        inspection = inspect_probe(self.write("exec.bt", source))
+        self.assertTrue(
+            any(f.rule == "unapproved-dereference" for f in inspection.findings),
+            [str(f) for f in inspection.findings],
+        )
+
+    def test_the_approved_block_in_a_different_probe_file_is_refused(self) -> None:
+        source = (
+            "tracepoint:sched:sched_process_exec\n{\n"
+            f'    printf("EV exec_started pid=%d path=%s\\n", pid, {self.APPROVED_EXPRESSION});\n'
+            "}\n"
+        )
+        inspection = inspect_probe(self.write("file.bt", source))
+        self.assertTrue(
+            any(f.rule == "unapproved-dereference" for f in inspection.findings)
+        )
+
+
 class TestSchemaAgreement(GateTestCase):
     def test_the_producer_field_set_is_read_from_its_source(self) -> None:
         consumed = producer_fields(PRODUCER)
