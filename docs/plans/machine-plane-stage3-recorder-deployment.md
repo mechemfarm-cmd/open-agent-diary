@@ -1,0 +1,354 @@
+# Machine plane — Stage 3 proposal: the privileged recorder, deployed
+
+**Status:** proposal for review. Nothing here has been built or run.
+**Predecessors:** Stage 1 closed (final result approved); Stage 2 approved at
+`495e48d` / `b64fd7e` for the producer and the demonstrated ingestion boundary.
+**Target host:** Emily.
+**Author:** Tom. Written for Alice's review, then Bill's authorization.
+
+---
+
+## 0. Plain language first
+
+Right now the machine plane is a library that can read events if somebody hands it
+a file of them. Nothing on any machine is watching. Every test passes, every
+boundary check passes, and no probe has ever been attached outside a Stage 1
+window.
+
+Stage 3 is the step that makes it real: **one small privileged program that
+watches, and one unprivileged program that reads what it wrote.**
+
+Nothing in between. The watcher cannot be reached by the agent; the reader cannot
+write. That is the whole shape, and everything below is the detail of making it
+true rather than approximately true.
+
+## 1. Scope, and the numbering question (please check this first)
+
+The design's §16 numbers the stages:
+
+| §16 | What it says |
+|---|---|
+| Stage 0 | evaluate (§14). No code |
+| Stage 1 | ingestion boundary and identity (§5, §8). No UI, no chain |
+| Stage 2 | privilege separation, proven |
+| Stage 3 | chain and checkpoints (§1.2, §10) |
+| Stage 4 | view and switch (§11, §12) |
+
+The executed sequence has not matched that numbering:
+
+- Stage 0 was run as designed.
+- **Stage 1 was inserted** — a producer evaluation (probes, coverage, loss) that
+  §16 does not list.
+- **Stage 2 merged §16's Stages 1 and 2** — the producer plus the ingestion
+  boundary plus the separation proof.
+
+So §16's Stage 3 — chain and checkpoints — is the next item *in §16's numbering*,
+but it is not the next thing that needs to exist. Your Stage 2 approval was
+explicit that it covered "the producer and demonstrated ingestion boundary" and
+that "the privileged live deployment/service still needs separate implementation
+and acceptance checks."
+
+**This proposal is that deployment, and calls it Stage 3.** Consequences, stated
+rather than implied:
+
+- chain and checkpoints move to Stage 4;
+- view and switch move to Stage 5;
+- §16 should be amended when this is approved, because a plan whose numbering no
+  longer matches its execution is how the last two rounds of confusion started.
+
+The justification is that §16 assumed the deployed recorder was part of "privilege
+separation, proven". Your review correctly separated the *property* (proven, on
+the spool boundary) from the *deployment* (not built). A property that no running
+process provides is not yet a system, and a chain over evidence nobody produces
+would be a chain over nothing.
+
+If you would rather keep §16's numbering and fold the deployment into Stage 4 as
+its first half, say so and I will restructure — the content does not depend on
+the label.
+
+## 2. The containment problem on this fleet, stated before anything else
+
+§1.3 of the design says it plainly: *"Agent with sudo. Explicitly outside the
+guarantee."*
+
+**On Emily today, the agent has passwordless sudo.** It is the same account
+(`willard`, uid 1000, home `/home/willard`) that owns the Hermes gateway, and it
+can become root in one command without a password.
+
+Verified on Emily while writing this, not assumed:
+
+```
+$ sudo -n true          -> succeeds, no password
+$ grep -rl willard /etc/sudoers.d/
+  /etc/sudoers.d/tom
+  /etc/sudoers.d/netmap-wifi
+```
+
+That has a specific, unflattering consequence:
+
+> Deploying a root-owned recorder on Emily today produces an **audit-trail
+> integrity** property, not a containment property. It stops an agent that has
+> been prompt-injected into doing something *careless*. It does not stop an agent
+> that decides to become root, because nothing stops that.
+
+This is not a reason not to build it. It is a reason not to claim more than it
+delivers — and the design's whole posture is that an overclaimed guarantee is
+worse than a smaller honest one.
+
+**Two options, and this is a decision for Bill, not for me:**
+
+- **(a) Deploy the recorder now, label the guarantee honestly.** The recorder runs
+  as root. The agent runs as `willard` with sudo. Every acceptance check about
+  "the agent cannot write the spool" is then demonstrated with an unprivileged
+  user that *lacks* sudo, and the document says plainly that this is a model of
+  the agent's behaviour, not a constraint on it. Cheap, immediate, honest.
+- **(b) Move Hermes to a dedicated unprivileged account** (`hermes`, no sudo, no
+  docker group, no systemctl rights) and run the recorder as root. This is the
+  change that makes the guarantee real. It is also a change to the thing Bill
+  uses every day: session files, plugins, the diary service unit, paths, and
+  every script that assumes `$HOME` is `/home/willard`.
+
+My recommendation is **(a) now, (b) as its own piece of work.** (b) is not a
+deployment detail; it is a fleet-wide account change with a real chance of
+breaking the agent it is meant to constrain, and bundling it into a recording
+deployment is exactly the kind of scope mixing that produced the mess in
+September.
+
+Stage 3 proceeds on (a) unless Bill says otherwise. If (b) is chosen instead, this
+proposal needs a section added, not a rewrite.
+
+## 3. What the recorder is
+
+A systemd system service, running as root, with one job:
+
+1. create a cgroup scope for a named workload;
+2. launch that workload inside the scope;
+3. measure the scope's cgroup inode;
+4. attach the probes (one `bpftrace` process per probe script);
+5. read `EV`/`MARK` lines, normalise them, write records to the spool;
+6. detach, seal the segment, exit.
+
+It never reads the agent's files, never talks to the Diary, never holds a database
+handle, and never executes anything the agent asks for.
+
+```
+  systemd (pid 1)
+      |
+      +-- machine-plane-recorder.service   root, hardened, no network
+              |
+              +-- systemd-run --scope  -->  the workload
+              |        (join key: cgroup inode)
+              +-- bpftrace exec.bt
+              +-- bpftrace file.bt
+              +-- bpftrace net.bt
+              |
+              v
+        /var/lib/machine-plane/spool/    root:mp-read 0750
+              |   segment-<boot>-<seq>.ndjson   (sealed, append-only in practice)
+              v
+        machine-plane-import.timer       unprivileged
+              |
+              v
+        machine events store  -->  view
+```
+
+## 4. Supervisor mode, and why not the gateway yet
+
+The recorder needs to know *which* cgroup belongs to *which* run. There are two
+ways to get that:
+
+- **Supervisor mode** — the recorder creates the scope and launches the workload,
+  so the join is structural: it knows the scope because it made it.
+- **Observer mode** — something else (the Hermes gateway) launches the scope, and
+  the recorder discovers and attaches to it.
+
+**Stage 3 builds supervisor mode only.** It is proven, it gives the cgroup join
+for free, and it does not touch how Hermes runs.
+
+Observer mode is the thing that eventually records real agent sessions, and it is
+deliberately not in this stage: it needs to answer what happens when a scope
+appears and disappears between two polls, what happens when several runs overlap,
+and how attachment latency is bounded. Those are real questions with wrong answers
+available, and answering them while also deploying a service for the first time
+would mean debugging two unknowns at once.
+
+So Stage 3's live proof is **a named workload in a named window** — the same
+discipline Stage 1 used, for the same reason.
+
+## 5. The launch contract
+
+Everything the producer needs, spelled out, because Stage 2's blocker was exactly
+this seam being unspecified:
+
+| Input | Source | Why |
+|---|---|---|
+| `host_id` | supervisor | stable per machine |
+| `boot_id` | `/proc/sys/kernel/random/boot_id` | identity changes across reboot |
+| `scope` | the scope the recorder created | correlation matches on this, not on the inode |
+| `cgroup` inode | measured from the scope before attach | joins probe events to the run |
+| probe paths | installed read-only at `/usr/lib/machine-plane/probes/` | not writable by the agent |
+| segment path | derived from boot id + monotonic sequence | restart produces a new segment |
+
+The `scope_by_cgroup` map from Stage 2 is populated here, from measurement, not
+from a guess. If the measured inode differs from the one the scope reports, the
+run fails closed and says which two values disagreed — the same check that caught
+the `--expand-environment` bug in Stage 1's preflight.
+
+## 6. Privilege model
+
+- **Recorder:** root, started by systemd, `User=root`.
+  `CapabilityBoundingSet` limited to what attaching actually needs
+  (`CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_ADMIN`, `CAP_SYS_RESOURCE`), everything else
+  dropped. `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `PrivateTmp=yes`, `RestrictAddressFamilies=AF_UNIX`, no network.
+  `ReadWritePaths=` exactly the spool directory.
+- **Spool:** `root:mp-read 0750`, files `0640`. The agent's account is not in
+  `mp-read`.
+- **Importer:** unprivileged, reads the spool, writes the store. Cannot alter a
+  record, cannot create one.
+- **Probes:** read-only, root-owned, installed by the package. The recorder
+  executes them; nothing else may modify them.
+
+The guarantee this buys, stated exactly: **an unprivileged process can read the
+spool and cannot write, truncate, rename, or delete anything in it.** Not "the
+agent cannot see it" — the view has to read it (§12 of the design), so read access
+is required and claiming otherwise would be the same overclaim the Stage 2
+separation proof corrected.
+
+## 7. Lifecycle
+
+```
+start  -> measure -> attach -> run -> detach -> seal -> exit 0
+```
+
+- **Seal** means the segment ends with a terminal record carrying: end reason
+  (`workload_exit`, `duration_elapsed`, `probe_error`, `recorder_signal`), the
+  final loss counter, and the count of records written. A segment without a
+  terminal record is a torn tail and the importer treats it as a gap — it is
+  never silently accepted.
+- **One run, one segment.** No appending across runs, so a crash cannot corrupt a
+  segment that was already sealed.
+- **Restart** seals any unsealed segment as `torn_tail` before starting a new one.
+
+## 8. Loss, rotation, clock, crash
+
+§10 requires these before the chain, and the recorder is where they live:
+
+- **Rotation.** A hard allocation (`machine-plane-max-bytes`), oldest sealed
+  segment deleted first. Deletion is never silent: a `retention_dropped` record is
+  written to the newest segment carrying the count and the oldest timestamp
+  dropped, so the view can draw the hole.
+- **Disk full.** `sink_unavailable`-style gap, run continues, loss counted. Never
+  silent degradation.
+- **Clock.** Monotonic for ordering, wall clock as evidence only. Boot id
+  recorded. `clock_jump` emitted on an NTP step or suspend/resume, detected by
+  comparing monotonic deltas against wall deltas across a sampling interval.
+- **Crash.** Torn tail sealed on restart, truncation recorded as a gap.
+- **Schema version** on every record; the importer fails closed on mismatch
+  (already implemented and proven in Stage 2).
+
+## 9. Failure modes, and what each does
+
+| Failure | Behaviour |
+|---|---|
+| Probe fails to attach | run fails closed, named error, no records claimed complete |
+| Workload exits early | clean seal with `workload_exit`; not an error |
+| Workload stalls but stays alive | stall detected by the run sheet's progress rule; voided |
+| Recorder killed | torn tail on restart, sealed as a gap |
+| Spool full | gap + loss count, run continues |
+| Disk full | gap, run continues until the run ends |
+| Clock step | `clock_jump` record |
+| Agent tries to write the spool | permission denied; nothing else needed |
+| Scope inode mismatch | fail closed, both values named |
+
+## 10. What an operator can see
+
+Without reading internals, and without root:
+
+- `machine-plane-recorder status` — is the service running, when did the last run
+  end, and why;
+- the newest segment's terminal record — records written, loss count, end reason;
+- whether any segment is unsealed (a torn tail);
+- how much of the allocation is in use, and whether rotation has dropped anything.
+
+This matters because §17 asks whether privilege separation can be made
+comprehensible to a non-technical operator. Stage 3's answer is a small, honest
+status surface, not a dashboard.
+
+## 11. Acceptance checks
+
+Each is runnable and falsifiable. A failure voids the run rather than being
+written around.
+
+1. Service installs, starts as root, survives a restart, is `enabled`.
+2. Recorder launches the named workload in a scope; measured cgroup inode equals
+   the value the scope reports.
+3. Attaching succeeds with exactly three probes; the process count is exact, not
+   inferred from a substring match.
+4. Events are produced, ingested by the unprivileged importer, and the ingested
+   count equals emitted minus declared loss.
+5. A workload signalled mid-run produces a sealed segment with an explicit end
+   reason — not a silent stop.
+6. Rotation: force the allocation below segment size; the oldest segment is
+   dropped and a `retention_dropped` record appears with the right count.
+7. Permission: an unprivileged account that lacks sudo cannot write, truncate,
+   rename, or delete a spool file. Attempted and denied, from outside the
+   recorder.
+8. A deliberately broken probe fails the run closed with a named error and
+   produces no segment claiming completeness.
+9. `clock_jump` is produced by a simulated step.
+10. No content beyond the declared metadata fields appears in any record —
+    checked by scanning a real segment for fields the schema does not define.
+
+Check 7 must be run with an account that does not have sudo. On Emily, that means
+a purpose-made account for the test, because `willard` has sudo and would pass the
+check for the wrong reason. This is the concrete consequence of section 2.
+
+## 12. Non-goals
+
+- **Not** chain or checkpoints. Those are Stage 4.
+- **Not** the kill switch, not the view. Stage 5.
+- **Not** observer mode, not gateway integration.
+- **Not** content capture. Metadata only, unchanged.
+- **Not** a change to how Hermes runs, its account, or its configuration.
+- **Not** any second host. Emily only.
+
+## 13. Risk and rollback
+
+The recorder is an addition, not a modification: no existing service changes. It
+touches one new path (`/var/lib/machine-plane`), one unit, and one importer timer.
+
+Rollback is: `systemctl disable --now machine-plane-recorder.service`, remove the
+unit and the spool, and the fleet is exactly as it is today. No agent behaviour
+changes at any point, because nothing in the agent path is modified.
+
+The real risk is not the recorder; it is **the window**. Attaching probes costs
+CPU and generates real output volume — Stage 1 measured approximately 400 KB/s
+for a busy workload — and an always-on recorder on Emily's SD card would be a
+problem for a host that already shows SATA timeouts. **Stage 3 runs bounded: one
+named workload, one measured window, then detach.** Always-on is a separate
+decision that needs its own numbers, and should not be assumed to follow from a
+successful deployment.
+
+## 14. Questions for Alice
+
+1. Is the renumbering in §1 acceptable, or should the deployment fold into
+   Stage 4 as its first half?
+2. Is (a) — deploy now with the guarantee labelled audit-integrity-only — the
+   right call, or does the deployment wait for (b)?
+3. Supervisor mode only, or is observer mode required before this counts as
+   deployed?
+4. Should retention/rotation be in this stage, or is it Stage 4's first piece?
+   My view: it belongs here, because an unbounded recorder is a disk-full
+   incident, and §10 puts it before the chain for that reason.
+5. Is check 10 (no content beyond the schema) required before deployment, or
+   acceptable as a check run during the first window?
+
+## 15. What this does not claim
+
+- It does not claim the agent is contained. On today's account layout it is not
+  (section 2).
+- It does not claim the probes are complete. The seven declared gaps from
+  Stage 1 and Stage 2 are unchanged.
+- It does not claim always-on is affordable. Only that one bounded run works.
+- It does not claim the view exists. It does not.
