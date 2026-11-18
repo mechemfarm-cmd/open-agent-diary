@@ -115,7 +115,11 @@ def main(argv: list[str] | None = None) -> int:
     # field from a legitimate one. No probes means no schema, which means no
     # import — failing closed rather than importing on an assumed schema.
     probe_paths = sorted(Path(args.probes).glob("*.bt"))
-    gate1 = run_gate(probe_paths, producer_module=_producer_module())
+    gate1 = run_gate(
+        probe_paths,
+        producer_module=_producer_module(),
+        mode="control" if args.control else "filtered",
+    )
     print(gate1.report())
     if not gate1.passed:
         print("\nrefusing to import: Gate 1 failed, so no schema is trustworthy",

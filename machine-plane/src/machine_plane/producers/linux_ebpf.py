@@ -54,6 +54,19 @@ from ..producer import Producer, RawEvent
 
 #: Sensor event names this producer understands. Anything else that presents as an
 #: event is reported as a gap rather than skipped.
+def _same_cgroup(left: object, right: object) -> bool:
+    """Numeric equality, the same rule accounting.is_in_scope applies.
+
+    String comparison treats "007" and "7" as different cgroups, which would count an
+    in-scope record as out of scope and make the producer's number disagree with the
+    importer's for reasons unrelated to scope.
+    """
+    try:
+        return int(str(left).strip()) == int(str(right).strip())
+    except (TypeError, ValueError):
+        return False
+
+
 KNOWN_EVENT_NAMES = frozenset({"exec_attempt", "exec_started", "open", "connect"})
 
 #: Which correlation *subjects* each sensor event can produce.
@@ -570,7 +583,7 @@ class LinuxEBPFProducer(Producer):
         if inode is not None and event.identity is not None:
             domain = event.identity.isolation_domain
             observed = getattr(domain, "id", None) if domain is not None else None
-            if observed is not None and str(observed) != inode:
+            if observed is not None and not _same_cgroup(observed, inode):
                 self._out_of_scope += 1
         return event
 
