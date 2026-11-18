@@ -272,5 +272,3 @@ class TestClassificationIsClosed(unittest.TestCase):
 
         for member in GAP_TYPES:
             self.assertNotIn(member, ACTION_TYPES)
-
-
