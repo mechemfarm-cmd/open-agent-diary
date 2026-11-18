@@ -142,3 +142,52 @@ class TestControlImportPath(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOneBadSegmentDoesNotStarveTheRest(unittest.TestCase):
+    """A skipped segment must not abort the import.
+
+    Found in the live validation window: a control segment sitting in the spool made
+    the normal import return before it reached the filtered capture that sorted after
+    it, so the capture was never imported and the run looked like it had failed.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="mp-skip-"))
+        self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
+        self.spool = self.root / "spool"
+        self.spool.mkdir()
+        self.store = self.root / "events.ndjson"
+
+    def run_import(self, *extra: str) -> tuple[int, str, str]:
+        argv = [
+            "--spool", str(self.spool),
+            "--store", str(self.store),
+            "--checkpoint-dir", str(self.root / "cp"),
+            "--refused-dir", str(self.root / "refused"),
+            *extra,
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = importer_cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_control_segment_does_not_block_a_later_filtered_one(self) -> None:
+        # Sorted order matters: 000001 sorts before 000002.
+        seal(self.spool / "segment-b-000001-ctrl.ndjson", "control")
+        seal(self.spool / "segment-b-000002-filt.ndjson", "filtered")
+
+        code, out, err = self.run_import("--probes", str(PROBES))
+
+        self.assertIn("control artifact", err)
+        self.assertIn("skipped for mode mismatch", err)
+        # The filtered segment after it must still have reached the store.
+        self.assertTrue(self.store.exists(), "the later segment was starved")
+        stored = [
+            json.loads(line)
+            for line in self.store.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(stored), 5, f"expected the filtered segment only: {out}")
+        # Non-zero because a segment was skipped, but the work still happened.
+        self.assertNotEqual(code, 0)

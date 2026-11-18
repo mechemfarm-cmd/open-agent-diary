@@ -135,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     segment_scopes: set[str] = set()
     imported_total = duplicates_total = refused_records = already_total = 0
     refused: list[str] = []
+    mode_skipped: list[str] = []
 
     def accumulate(total: Counts, part: Counts) -> None:
         total.lifecycle += part.lifecycle
@@ -168,20 +169,26 @@ def main(argv: list[str] | None = None) -> int:
         # Modes do not mix, in either direction. A control segment counted as
         # workload evidence overstates what the workload did; a filtered segment in
         # the control store would make the comparison meaningless.
+        # Skip, do not abort. One segment of the wrong mode is a reason to refuse
+        # that segment; it is not a reason to leave every later segment unimported.
+        # Returning here meant a stale control artifact in the spool silently
+        # starved every capture that sorted after it.
         if args.control and counts.capture_mode != "control":
             print(
                 f"  REFUSED {segment.name}: not a control run "
                 f"(capture_mode={counts.capture_mode})",
                 file=sys.stderr,
             )
-            return 1
+            mode_skipped.append(segment.name)
+            continue
         if not args.control and counts.capture_mode == "control":
             print(
                 f"  REFUSED {segment.name}: control artifact in the workload-evidence "
                 "path — import it with --control",
                 file=sys.stderr,
             )
-            return 1
+            mode_skipped.append(segment.name)
+            continue
 
         # The scan is a precondition, not a report.
         scan = gate2(segment, recorder_id=args.recorder, probe_fields=gate1.fields)
@@ -243,8 +250,10 @@ def main(argv: list[str] | None = None) -> int:
     if refused:
         print(f"\nrefused segments: {len(refused)} — not imported as evidence",
               file=sys.stderr)
-        return 1
-    return 0
+    if mode_skipped:
+        print(f"\nskipped for mode mismatch: {len(mode_skipped)} — left in the spool",
+              file=sys.stderr)
+    return 1 if (refused or mode_skipped) else 0
 
 if __name__ == "__main__":
     sys.exit(main())
