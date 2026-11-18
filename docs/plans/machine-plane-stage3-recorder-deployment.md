@@ -802,11 +802,32 @@ gate with fingerprint-bound consent, bounded retention with an authoritative
 journal, the importer for sealed segments, Gate 1 (static, pre-attach) and Gate 2
 (runtime, post-window). Unit files as a template oneshot with no `[Install]`.
 
-**Run once** on the reference host: 45-second window, 199,221 records in one
-segment, sealed, `workload_exit`. Ingestion: 199,225 emitted, 199,225 stored, 0
-duplicates. Ownership checks 19–22 attempted rather than assumed — nine checks,
-all pass. Later captures of 20 seconds produced ~80,000 records each, which is the
-write-volume argument in §13 made concrete.
+**Run once** on the reference host: 45-second window, sealed, `workload_exit`.
+Ownership checks 19–22 attempted rather than assumed — nine checks, all pass, with
+a retained JSON artifact. Later captures of 15–20 seconds produced 60–80,000
+records each, which is the write-volume argument in §13 made concrete.
+
+**The counters, named, because the first version of this section conflated two
+populations.** Three segments existed: 2 + 2 + 199,221 physical records. The
+"199,221 sealed" figure was the largest segment; "199,225" was all three. Every
+count now carries its definition and an equation that is checked rather than
+asserted:
+
+```
+records  = lifecycle + action + gaps
+ingested = imported + duplicates + refused + already
+```
+
+`already` is the count below a resumed checkpoint. Without it every re-run reads
+as loss, which is what happened on the second import.
+
+**Attribution, which is the number that matters.** The probes are host-wide, so
+the total is mostly the machine's own activity. A 15-second capture after the
+attach-gate fix: **1,261 events attributable to the scope, 61,459 host-wide.** An
+earlier capture of the same workload recorded **zero** attributable events while
+looking entirely successful, because the workload finished before `bpftrace`
+attached. The importer prints matched/unmatched and states plainly that without a
+supplied scope the records must not be read as evidence of what the workload did.
 
 **Seven defects were found by running it**, five of them in code this document
 describes as designed:
@@ -831,7 +852,19 @@ but the records are not attributable to the workload that ran. §11.1 checks 13�
 read as though they were. Filtering the probes is a change to reviewed probe
 sources and needs its own review.
 
+**Gate 2 is a precondition of import**, not a report. The importer runs Gate 1 for
+the schema and Gate 2 per segment; a failing segment is refused, its findings
+persisted under `store/refused/`, and it never reaches the store. The recorder also
+scans after sealing and renames a failing segment to `.voided`. Demonstrated live:
+the importer refused the earlier segment carrying unredacted exec paths, 79,329
+records, which had been sitting in the spool as ordinary evidence.
+
 **Checks exercised only in the suite, not on hardware:** 17, 18, 23–29 (retention
-and rotation behaviours). One rotation did occur live — three segments were dropped
-under the byte cap during a later capture — but the failure branches were not
-exercised on the host.
+and rotation behaviours). One rotation did occur live — segments were dropped under
+the byte cap — but the failure branches were not exercised on the host.
+
+**Two further defects were found after this section was first written**, both by
+running rather than reviewing: the workload finished before the probes attached
+(above), and Gate 2 was a detector an operator could skip. Both are fixed and both
+are the same shape of error — a guarantee that existed in the design and not on the
+execution path.
