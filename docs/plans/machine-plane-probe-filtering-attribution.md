@@ -79,10 +79,17 @@ attaching the production probes twice for no reason.
    prove two things: the predicate compiles for the measured value, and the argument
    arrives. It is torn down before the run and produces no evidence.
 
-3. **Confirm the argument is required.** A probe run with no positional argument
-   must fail to attach, and the test asserts that failure rather than assuming it. A
-   probe that silently defaulted to "no filter" is precisely the failure this stage
-   exists to prevent.
+3. **Confirm the argument is present, because the kernel will not.** Tested on this
+   host: `bpftrace exec.bt` with no positional argument *attaches successfully*. It
+   evaluates `$1` as 0, every `EV` block matches nothing, and the run produces a
+   successful-looking empty capture. An earlier draft claimed the probe would
+   refuse; that was wrong.
+
+   The requirement is therefore enforced twice, neither of which is the kernel:
+   Gate 1 requires the predicate in the source, and the recorder asserts the
+   measured inode is the last argument of every child's argv. A run whose
+   `in_scope_actions` is zero when the declared manifest expects otherwise is void,
+   not "the workload was quiet".
 
 4. **Final attach.** The real probe set, one process per probe script, three
    processes, which stay attached for the window. Each child's argv is captured and

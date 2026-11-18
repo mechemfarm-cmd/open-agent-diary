@@ -29,7 +29,7 @@ tracepoint:syscalls:sys_enter_connect
 }
 
 tracepoint:syscalls:sys_exit_connect
-/@attempt[pid, tid]/
+/@attempt[pid, tid] && cgroup == $1/
 {
     printf("EV connect pid=%d tid=%d rc=%d cgroup=%llu ts=%llu label=%s\n",
            pid, tid, args->ret, cgroup, nsecs, comm);
