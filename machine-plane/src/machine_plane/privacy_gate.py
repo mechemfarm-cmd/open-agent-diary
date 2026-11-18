@@ -5,6 +5,13 @@ dereference. So this inspects the probe sources as artifacts, on the machine,
 before installation and before every attach, and refuses when the sources ask the
 kernel for more than the approved set.
 
+**A dereference is judged by where it happens, not by how it is used.** The only
+place a forbidden pointer may appear at all is inside a `printf` argument, and
+only the one approved triple may appear there. Anywhere else in the program —
+an assignment, a condition, an alias, a helper argument, a filter — is refused
+regardless of whether its value is ever printed. Reading the pointer is the
+thing being controlled, not publishing its value.
+
 **This is a verifier for one fixed artifact grammar, not a bpftrace parser.**
 It is written against probe sources that follow a single shape, and it refuses
 anything outside that shape rather than guessing:
@@ -178,6 +185,24 @@ def inspect_probe(path: str | Path) -> ProbeInspection:
                     target.name,
                     "unsupported-syntax",
                     f"{label} at {match.group(0)[:40]!r} — outside the artifact grammar",
+                )
+            )
+
+    # A dereference outside a printf argument never reaches the argument loop
+    # below, so it would pass unexamined. Reading the pointer is the thing being
+    # controlled, so any occurrence outside a printf is refused outright.
+    spans = [(match.start(), match.end()) for match in _PRINTF.finditer(source)]
+    for token in FORBIDDEN_TOKENS:
+        for token_match in re.finditer(re.escape(token), source):
+            position = token_match.start()
+            if any(start <= position < end for start, end in spans):
+                continue
+            inspection.findings.append(
+                Finding(
+                    target.name,
+                    "dereference-outside-printf",
+                    f"{token!r} at offset {position} is not a printf argument — "
+                    "reading the pointer is refused wherever it happens",
                 )
             )
 
