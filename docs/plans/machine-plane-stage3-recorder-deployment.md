@@ -1,6 +1,10 @@
 # Machine plane — Stage 3 proposal: the privileged recorder, deployed
 
 **Status:** proposal for review. Nothing here has been built or run.
+**Revision:** 2 — revised after review of `77892f6`. Two blockers fixed
+(bounded/manual service in §3, consent bound to a privilege fingerprint in §2.5)
+and four clarifications added (ownership matrix §6, startup consent matrix §7.1,
+rotation failure semantics §8, pre-attach privacy gate §11.0).
 **Predecessors:** Stage 1 closed (final result approved); Stage 2 approved at
 `495e48d` / `b64fd7e` for the producer and the demonstrated ingestion boundary.
 **Target host:** the reference host.
@@ -63,9 +67,9 @@ the spool boundary) from the *deployment* (not built). A property that no runnin
 process provides is not yet a system, and a chain over evidence nobody produces
 would be a chain over nothing.
 
-If you would rather keep §16's numbering and fold the deployment into Stage 4 as
-its first half, say so and I will restructure — the content does not depend on
-the label.
+Review of `77892f6` accepted this numbering. On approval, design §16 is amended so
+the plan follows the sequence that actually happened: Stage 3 deployment, Stage 4
+chain and checkpoints, Stage 5 view and switch.
 
 ## 2. Containment: what this protects, whose decision it is
 
@@ -181,12 +185,79 @@ Option (b) — moving Hermes to a dedicated unprivileged account — remains the
 to reach `enforced`, and remains a separate piece of work. This stage does not
 perform it and does not pretend to.
 
+### 2.5 Consent is bound to the privilege fingerprint that was detected
+
+Revision 1 recorded that the user accepted advisory mode and re-evaluated the
+level at every start. That is not enough: re-evaluating what the situation *is*
+says nothing about whether the user agreed to *that* situation. A consent obtained
+when the agent had one grant remains on disk and would silently cover a different
+set of grants after the next change.
+
+**The fingerprint.** Detection produces a canonical record, hashed with SHA-256
+over JSON with sorted keys, sorted lists, UTF-8, no insignificant whitespace:
+
+| Field | Source |
+|---|---|
+| `account`, `uid` | the agent's account and numeric id |
+| `host_id` | stable machine identifier |
+| `grants` | matching `NOPASSWD`/`ALL` grant names, sorted |
+| `groups` | privilege-relevant memberships (`sudo`, `wheel`, `docker`, `disk`, `lxd`, `mp-read`), sorted |
+| `is_root` | whether the agent's account is root |
+| `can_control_units` | polkit result for starting/stopping system units |
+| `level` | `enforced` or `advisory` |
+| `reasons` | the individual matches that produced the level, sorted |
+| `detector` | detector version, so a detection change cannot silently reuse an old consent |
+
+`/etc/machine-plane/containment.json` stores the fingerprint, the level, the
+reasons, when detection ran, and the consent record (how it was given, when).
+It also stores a fingerprint of the **recorder configuration** — unit, probe set,
+spool path, allocation — because consent to a different recording configuration is
+also not consent to this one.
+
+**Validity rule.** Consent is honoured only when *both* fingerprints match what is
+stored. Anything else requires fresh explicit consent. Concretely:
+
+| Situation | Behaviour |
+|---|---|
+| no consent file, detection `advisory` | refuse, print the block from §2.2 |
+| consent valid, fingerprint unchanged | start |
+| consent valid, fingerprint changed | **refuse**, name which field changed, require fresh consent |
+| detection `enforced`, no advisory consent | start; record the new state; mark any old advisory consent superseded |
+| `enforced` → `advisory` | **refuse**; fresh explicit acceptance required before any attach |
+| detection error or unknown | refuse — never claim `enforced` from an unknown |
+| non-interactive and consent invalid | exit non-zero; no `--force`, no default-accept |
+
+The `enforced → advisory` case is the one that matters most: it is the transition
+where a machine quietly becomes less protected than it was, and the previous
+consent was given under a materially better guarantee. It is never automatic.
+
+**Stated plainly for the user**, when consent is refused:
+
+```
+MACHINE PLANE — CONSENT EXPIRED
+
+The protection situation changed since advisory mode was accepted.
+
+  Level:    enforced -> advisory
+  Changed:  grants
+            + /etc/sudoers.d/<grant>
+
+The previous acceptance does not cover this. Re-run the installer to review
+and accept the new state, or restore the previous account configuration.
+```
+
+Nothing is recorded in this state; the recorder does not start.
+
+Revision 1's failure was that it treated consent as a fact about the past rather
+than a claim about a specific present. The fingerprint is what makes it a claim.
+
 ## 3. What the recorder is
 
-A systemd system service, running as root, with one job:
+A systemd **template** service, invoked by name for one run, running as root:
 
-0. determine the protection level (§2.1) and **refuse to start silently in
-   `advisory`** — if the user has not accepted it, the run does not happen;
+0. determine the protection level (§2.1) and verify that consent matches the
+   current privilege fingerprint (§2.5) — if either check fails, the run does not
+   happen;
 1. create a cgroup scope for a named workload;
 2. launch that workload inside the scope;
 3. measure the scope's cgroup inode;
@@ -197,25 +268,43 @@ A systemd system service, running as root, with one job:
 It never reads the agent's files, never talks to the Diary, never holds a database
 handle, and never executes anything the agent asks for.
 
+**It does not run at boot, and it cannot be enabled.** The unit is
+`machine-plane-recorder@.service` — a template with `Type=oneshot` and **no
+`[Install]` section**, so `systemctl enable` has nothing to install and a reboot
+starts nothing. A run is invoked explicitly, once, by name:
+
 ```
-  systemd (pid 1)
+systemctl start machine-plane-recorder@mp-stage3-<capture-id>.service
+```
+
+The instance name is the capture id: two runs cannot collide, and the unit that
+produced a segment is recorded in the segment's own path. "Bounded" is therefore a
+property of the unit design rather than of anyone's intentions — which is the
+correction to revision 1, where "one bounded window" and "the service is
+`enabled`" could not both be true.
+
+The importer is a oneshot service too, started by hand after the run, not a timer.
+Nothing in Stage 3 fires on a schedule.
+
+```
+  started by hand — no [Install], no boot activation
       |
-      +-- machine-plane-recorder.service   root, hardened, no network
-              |
-              +-- systemd-run --scope  -->  the workload
-              |        (join key: cgroup inode)
-              +-- bpftrace exec.bt
-              +-- bpftrace file.bt
-              +-- bpftrace net.bt
-              |
-              v
-        /var/lib/machine-plane/spool/    root:mp-read 0750
-              |   segment-<boot>-<seq>.ndjson   (sealed, append-only in practice)
-              v
-        machine-plane-import.timer       unprivileged
-              |
-              v
-        machine events store  -->  view
+  machine-plane-recorder@<capture>.service    root, oneshot, hardened, no network
+      |
+      +-- systemd-run --scope  -->  the workload
+      |        (join key: cgroup inode)
+      +-- bpftrace exec.bt
+      +-- bpftrace file.bt
+      +-- bpftrace net.bt
+      |
+      v
+/var/lib/machine-plane/spool/    root:mp-read 0750
+      |   segment-<boot>-<seq>.ndjson   (sealed; one segment per run)
+      v
+machine-plane-import.service     mp-import:mp-read, oneshot, started after the run
+      |
+      v
+machine events store  -->  view
 ```
 
 ## 4. Supervisor mode, and why not the gateway yet
@@ -260,58 +349,163 @@ from a guess. If the measured inode differs from the one the scope reports, the
 run fails closed and says which two values disagreed — the same check that caught
 the `--expand-environment` bug in Stage 1's preflight.
 
-## 6. Privilege model
+## 6. Privilege model and the complete ownership matrix
 
-- **Recorder:** root, started by systemd, `User=root`.
-  `CapabilityBoundingSet` limited to what attaching actually needs
-  (`CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_ADMIN`, `CAP_SYS_RESOURCE`), everything else
-  dropped. `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`,
+Revision 1 said "importer: unprivileged" without naming it, which leaves the
+deployment with no concrete identity to implement. Named in full:
+
+**Identities**
+
+- **Recorder** — Unix user `root`. `CapabilityBoundingSet` exactly
+  `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_RESOURCE`, everything else dropped.
+  `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`,
   `PrivateTmp=yes`, `RestrictAddressFamilies=AF_UNIX`, no network.
   `ReadWritePaths=` exactly the spool directory.
-- **Spool:** `root:mp-read 0750`, files `0640`. The agent's account is not in
-  `mp-read`.
-- **Importer:** unprivileged, reads the spool, writes the store. Cannot alter a
-  record, cannot create one.
-- **Probes:** read-only, root-owned, installed by the package. The recorder
-  executes them; nothing else may modify them.
+- **Importer** — Unix user `mp-import`, primary group `mp-import`, supplementary
+  group `mp-read`. Not in `sudo`, `wheel`, `docker`, `disk` or `lxd`. Writes only
+  its own store.
+- **Agent** — Unix user `agent-account`. **Not** in `mp-read`, not in
+  `mp-import`. No access to the spool at all.
+- **Probes** — root-owned, `0644`, under `/usr/lib/machine-plane/probes/`,
+  installed by the package. Executed by the recorder; nothing else may modify them.
 
-The guarantee this buys, stated exactly: **an unprivileged process can read the
-spool and cannot write, truncate, rename, or delete anything in it.** Not "the
-agent cannot see it" — the view has to read it (§12 of the design), so read access
-is required and claiming otherwise would be the same overclaim the Stage 2
-separation proof corrected.
+**Objects**
 
-## 7. Lifecycle
+| Object | Owner:Group | Mode | Create | Read | Write / delete |
+|---|---|---|---|---|---|
+| `/var/lib/machine-plane` | root:root | 0755 | installer | all | root |
+| `spool/` | root:mp-read | 0750 | recorder | root, `mp-read` | **root only** |
+| `spool/segment-*.ndjson` (sealed) | root:mp-read | 0640 | recorder | root, `mp-read` | **root only** |
+| `spool/segment-*.partial` (live) | root:mp-read | 0640 | recorder | root only | root only |
+| `spool/retention.journal` | root:mp-read | 0640 | recorder | root, `mp-read` | root only |
+| `/etc/machine-plane/containment.json` | root:root | 0600 | installer | root | root |
+| probes | root:root | 0644 | package | all | root |
+| importer store | mp-import:mp-import | 0700 | importer | `mp-import` | `mp-import` |
+
+**Reading while the recorder appends — avoided by construction, not by locking.**
+
+A segment is written as `segment-<boot>-<seq>.ndjson.partial`. Sealing writes the
+terminal record, `fsync`s, and then **renames** to `segment-<boot>-<seq>.ndjson`.
+The importer scans only `*.ndjson`, so it can never read a segment that is still
+being appended to. No reader lock, no torn line, no "is this complete yet" check
+to get wrong.
+
+It also gives torn-tail detection for free: a `.partial` file at startup is a run
+that did not seal, and that is exactly what the recorder reports as `torn_tail`.
+
+The guarantee this buys, stated exactly: **an unprivileged process in `mp-read` can
+read a sealed segment and cannot write, truncate, rename, or delete anything in the
+spool.** Not "the agent cannot see it" — the view has to read it (§12 of the
+design), so read access is required, and claiming otherwise would be the same
+overclaim the Stage 2 separation proof corrected.
+
+## 7. Lifecycle — one invocation, one run, one segment
 
 ```
-start  -> measure -> attach -> run -> detach -> seal -> exit 0
+invoked by name -> preflight -> measure -> attach -> run -> detach -> seal -> exit
 ```
+
+No timer, no socket, no queue, no daemon. Nothing invokes this except a person.
 
 - **Seal** means the segment ends with a terminal record carrying: end reason
   (`workload_exit`, `duration_elapsed`, `probe_error`, `recorder_signal`), the
-  final loss counter, and the count of records written. A segment without a
-  terminal record is a torn tail and the importer treats it as a gap — it is
-  never silently accepted.
+  final loss counter, the protection level in force, and the count of records
+  written. The `fsync` then the rename (§6) is what makes the seal real; a
+  `.partial` file is by definition not sealed.
 - **One run, one segment.** No appending across runs, so a crash cannot corrupt a
   segment that was already sealed.
-- **Restart** seals any unsealed segment as `torn_tail` before starting a new one.
+- **Restart** seals any `.partial` file as `torn_tail` before starting a new one.
+- **The unit is inactive when the run ends.** `Type=oneshot` with
+  `RemainAfterExit=no`, so `systemctl is-active` reports `inactive`. There is no
+  resident process that could be left running by accident.
 
-## 8. Loss, rotation, clock, crash
+### 7.1 The startup matrix, as a test and not only as prose
 
-§10 requires these before the chain, and the recorder is where they live:
+Evaluated in this order at every invocation, before any scope is created or any
+probe is attached:
 
-- **Rotation.** A hard allocation (`machine-plane-max-bytes`), oldest sealed
-  segment deleted first. Deletion is never silent: a `retention_dropped` record is
-  written to the newest segment carrying the count and the oldest timestamp
-  dropped, so the view can draw the hole.
-- **Disk full.** `sink_unavailable`-style gap, run continues, loss counted. Never
-  silent degradation.
-- **Clock.** Monotonic for ordering, wall clock as evidence only. Boot id
-  recorded. `clock_jump` emitted on an NTP step or suspend/resume, detected by
-  comparing monotonic deltas against wall deltas across a sampling interval.
-- **Crash.** Torn tail sealed on restart, truncation recorded as a gap.
-- **Schema version** on every record; the importer fails closed on mismatch
-  (already implemented and proven in Stage 2).
+| # | Condition | Outcome |
+|---|---|---|
+| 1 | detection raised or returned unknown | **refuse**, exit 2 — "cannot determine protection level" |
+| 2 | `advisory`, no consent file | **refuse**, print the §2.2 block, exit 3 |
+| 3 | `advisory`, consent fingerprint mismatch | **refuse**, print the §2.5 block naming the changed fields, exit 4 |
+| 4 | `advisory`, consent valid | start, stamp `advisory` into the segment header |
+| 5 | `enforced`, no advisory consent | start, stamp `enforced`, write the new state to `containment.json` |
+| 6 | `enforced`, advisory consent present | start, stamp `enforced`, mark the old consent superseded |
+
+Installer consent and startup consent are the **same record**. The installer
+writes it; the recorder verifies it. There is no second, weaker path, and no flag
+that bypasses rows 1–3.
+
+## 8. Loss, retention, rotation, clock, crash
+
+§10 requires these before the chain, and the recorder is where they live.
+
+### 8.1 Rotation, and every way it can fail
+
+**Allocation.** A byte cap, `machine-plane-max-bytes`, enforced by the recorder and
+authoritative. An optional filesystem quota is a backstop against something else
+writing into the same filesystem — not the mechanism, because a quota fails at
+write time rather than prompting a rotation, and a rotation triggered by `ENOSPC`
+has already lost the record that hit it.
+
+**Order of operations, and why this order.** Only sealed segments are candidates;
+the active `.partial` is never deleted, because deleting the file being appended to
+loses the run in progress. Oldest sealed segment goes first:
+
+1. choose the oldest sealed segment; compute what will be freed;
+2. append a `retention_dropped` record to the **newest** segment — count, oldest
+   dropped timestamp, bytes freed, total dropped to date;
+3. `fsync` that segment;
+4. `unlink` the chosen segment;
+5. `fsync` the spool directory.
+
+The marker is written **before** the deletion, so a crash between 3 and 5 leaves a
+record of a drop that did not happen — harmless and correctable — rather than a
+deleted segment nobody recorded. On startup, a `retention_dropped` marker whose
+segment still exists is amended with `retention_aborted`. The other ordering fails
+unrecoverably, which is why it is not the one used.
+
+**If the newest segment cannot take the marker.** Explicit fallback chain:
+
+1. newest sealed segment;
+2. `spool/retention.journal` — append-only, never rotated, root-owned, kept for
+   exactly this case;
+3. nothing writable at all → **stop the run** with `retention_unrecordable`,
+   exit non-zero. Voided, not degraded: a spool that can neither be written nor
+   pruned means the numbers cannot be trusted.
+
+**Distinguishing retention loss from recorder loss.** Every loss record carries
+`loss_kind`, and the view reports them separately:
+
+| `loss_kind` | Means |
+|---|---|
+| `retention_dropped` | evidence deliberately deleted under the allocation |
+| `recorder_lost` | the recorder could not write (disk full, sink unavailable) |
+| `probe_lost` | the probes failed to emit (buffer loss) |
+| `torn_tail` | a segment that did not seal |
+
+They are not the same event and must not be summed into one total: a deliberate
+policy and a fault look identical once added together.
+
+**Deletion while the importer is reading.** Permitted, and safe. The importer opens
+a sealed segment and holds the descriptor; POSIX keeps an unlinked file readable to
+an open descriptor, so that read completes. What the reader loses is any *later*
+re-read — which is exactly what the `retention_dropped` marker tells it. Rotation
+takes no lock and does not consult the importer; the marker is the contract.
+
+**Disk full.** `sink_unavailable`-style gap, run continues, loss counted. Never
+silent degradation.
+
+**Clock.** Monotonic for ordering, wall clock as evidence only. Boot id
+recorded. `clock_jump` emitted on an NTP step or suspend/resume, detected by
+comparing monotonic deltas against wall deltas across a sampling interval.
+
+**Crash.** A `.partial` file is sealed as `torn_tail` on the next start, and the
+truncation is recorded as a gap.
+
+**Schema version** on every record; the importer fails closed on mismatch
+(already implemented and proven in Stage 2).
 
 ## 9. Failure modes, and what each does
 
@@ -348,44 +542,111 @@ status surface, not a dashboard.
 Each is runnable and falsifiable. A failure voids the run rather than being
 written around.
 
-1. Service installs, starts as root, survives a restart, is `enabled`.
-2. Recorder launches the named workload in a scope; measured cgroup inode equals
-   the value the scope reports.
-3. Attaching succeeds with exactly three probes; the process count is exact, not
-   inferred from a substring match.
-4. Events are produced, ingested by the unprivileged importer, and the ingested
-   count equals emitted minus declared loss.
-5. A workload signalled mid-run produces a sealed segment with an explicit end
-   reason — not a silent stop.
-6. Rotation: force the allocation below segment size; the oldest segment is
-   dropped and a `retention_dropped` record appears with the right count.
-7. Permission: an unprivileged account that lacks sudo cannot write, truncate,
-   rename, or delete a spool file. Attempted and denied, from outside the
-   recorder.
-8. A deliberately broken probe fails the run closed with a named error and
-   produces no segment claiming completeness.
-9. `clock_jump` is produced by a simulated step.
-10. No content beyond the declared metadata fields appears in any record —
-    checked by scanning a real segment for fields the schema does not define.
+### 11.0 Two privacy gates, and the first one comes before anything attaches
 
-11. Containment detection reports `advisory` for the agent's account on the reference host and
-    names every matching grant — not a generic "your agent may escalate".
-12. The install prompt defaults to no: an empty answer aborts, and nothing is
-    written under `/etc/machine-plane/`.
-13. A non-interactive install without `--accept-advisory` aborts. No path,
-    including automation, reaches advisory mode without an explicit yes.
-14. Accepting writes `containment.json` carrying the level, the account, the
-    matching grants, the time, and how consent was given.
-15. `status` prints the level before anything else, and every terminal record
-    carries the level in force for its run.
-16. Detection on the purpose-made unprivileged test account reports `enforced` —
-    proving the detector discriminates, rather than always answering `advisory`.
+A runtime scan of a segment proves what *was* recorded. It cannot undo a probe that
+already ran with a dereference nobody approved. So there are two gates, and the
+first is a precondition for the deployment existing at all.
 
-Check 7 must be run with an account that does not have sudo. On the reference host, that means
-a purpose-made account for the test, because the agent's own account has sudo and would pass
-the check for the wrong reason. This is the concrete consequence of section 2 — and
-checks 11 and 16 together are the proof that the system knows which case it is in,
-rather than reciting a fixed warning.
+**Gate 1 — static, pre-install and pre-attach.** Inspects the probe sources, the
+producer and the schema as artifacts, on the machine, before installation and again
+before every attach:
+
+- every field a probe emits is enumerated from its source, not from documentation;
+- no probe dereferences `args->filename`, `bprm->filename`, argv, environment, or
+  any content-bearing pointer, with **the one approved pathname dereference as the
+  sole exception**;
+- the schema's declared field set equals the union of fields the probes emit;
+- no field is typed as free text, path or blob.
+
+A failure blocks installation and blocks the attach. It is not a warning.
+
+**Gate 2 — runtime, post-window, before any number is reported.** Scans the sealed
+segment for fields the schema does not define, and for any value that looks like a
+path or free text. A failure voids the run.
+
+Both gates are required. Gate 2 does not substitute for Gate 1.
+
+### 11.1 The checks
+
+**Service shape (blocker 1)**
+
+1. The unit installs and is **startable**: `systemctl start
+   machine-plane-recorder@<capture>` works. It is **not enabled**: no symlink is
+   created under any `*.wants/`, `systemctl is-enabled` reports `disabled` or
+   reports no installation config, and after a reboot nothing has run.
+2. After the window: unit `inactive`, still not enabled, no `bpftrace` process,
+   no `mp-stage3-*` scope, no `.partial` file left behind.
+
+**Consent (blocker 2)**
+
+3. Detection reports `advisory` for the agent's account and names every matching
+   grant — not a generic "your agent may escalate".
+4. The install prompt defaults to no: an empty answer aborts and writes nothing
+   under `/etc/machine-plane/`.
+5. A non-interactive install without `--accept-advisory` aborts.
+6. Accepting writes `containment.json` with the fingerprint, level, reasons, time
+   and how consent was given.
+7. Startup matrix, each row exercised: unknown detection → exit 2; `advisory` with
+   no consent → exit 3; `advisory` with a changed fingerprint → exit 4; `advisory`
+   with valid consent → start.
+8. **Fingerprint change invalidates consent:** add a grant to the test account
+   between install and start; the recorder refuses, exits 4, and names the field
+   that changed.
+9. **`enforced` → `advisory` requires fresh consent:** begin from the no-sudo test
+   account, then add a sudo grant; the next start refuses rather than continuing.
+10. **`advisory` → `enforced` proceeds without advisory consent** and records the
+    new state.
+11. Detection on the purpose-made no-sudo account reports `enforced` — proving the
+    detector discriminates rather than always answering `advisory`.
+12. `status` prints the level first, and every terminal record carries the level in
+    force for its run.
+
+**Recording and ingestion**
+
+13. The recorder launches the named workload in a scope; the measured cgroup inode
+    equals the value the scope reports.
+14. Exactly three probes attach; the process count is exact, not inferred from a
+    substring match.
+15. Events are ingested by `mp-import`; the ingested count equals emitted minus
+    declared loss.
+16. A workload signalled mid-run produces a sealed segment with an explicit end
+    reason — not a silent stop.
+17. A deliberately broken probe fails the run closed with a named error and
+    produces no segment claiming completeness.
+18. `clock_jump` is produced by a simulated step.
+
+**Ownership (clarification 3)**
+
+19. An account that has no sudo and is only in `mp-read` **can read** a sealed
+    segment and **cannot** write, truncate, rename or delete anything in the spool.
+    Attempted and denied, from outside the recorder.
+20. `mp-import` cannot write the spool.
+21. The agent's account cannot read the spool at all — not a member of `mp-read`.
+22. The importer never reads a `.partial`: while a run is live, ingestion finds no
+    new sealed segment.
+
+**Retention (clarification 5)**
+
+23. Rotation: force the allocation below segment size; the oldest **sealed**
+    segment is dropped and `retention_dropped` records the right count. The active
+    `.partial` is never chosen.
+24. Marker fallback: make the newest segment unwritable; the marker lands in
+    `retention.journal` instead.
+25. Marker unrecordable: make both unwritable; the run stops with
+    `retention_unrecordable` and a non-zero exit.
+26. `loss_kind` values are distinct in the view — retention, recorder, probe and
+    torn tail are not summed into one number.
+
+**Privacy (clarification 6)**
+
+27. Gate 1 passes on the shipped probes and fails on a probe with an injected
+    `args->filename` dereference — proven both ways, before any attach.
+28. Gate 2 finds no field outside the schema in a real sealed segment.
+
+Check 19 must run as an account that has no sudo, because the agent's own account
+has sudo and would pass for the wrong reason. Checks 8–11 are the pair that prove
+the consent model is bound to a present state rather than to a remembered one.
 
 ## 12. Non-goals
 
@@ -394,49 +655,66 @@ rather than reciting a fixed warning.
 - **Not** observer mode, not gateway integration.
 - **Not** content capture. Metadata only, unchanged.
 - **Not** a change to how Hermes runs, its account, or its configuration.
-- **Not** any second host. the reference host only.
+- **Not** any second host. The reference host only.
+- **Not enabled at boot, and not always-on.** The unit has no `[Install]` section
+  and Stage 3 has no timer. Turning this into a resident recorder is a separate
+  decision requiring its own storage, rotation, CPU and wear measurements.
 
 ## 13. Risk and rollback
 
 The recorder is an addition, not a modification: no existing service changes. It
-touches one new path (`/var/lib/machine-plane`), one unit, and one importer timer.
+touches one new path (`/var/lib/machine-plane`), one template unit, one importer
+oneshot, and one consent file.
 
-Rollback is: `systemctl disable --now machine-plane-recorder.service`, remove the
-unit and the spool, and the fleet is exactly as it is today. No agent behaviour
-changes at any point, because nothing in the agent path is modified.
+Rollback is: `systemctl stop 'machine-plane-recorder@*'` if a run is live, then
+remove the unit files, the importer unit, `/etc/machine-plane/containment.json` and
+the spool. **Nothing was enabled**, so there is nothing to disable and nothing that
+survives a reboot. No agent behaviour changes at any point, because nothing in the
+agent path is modified.
 
-The real risk is not the recorder; it is **the window**. Attaching probes costs
-CPU and generates real output volume — Stage 1 measured approximately 400 KB/s
-for a busy workload — and an always-on recorder on the reference host's SD card would be a
-problem for a host that already shows SATA timeouts. **Stage 3 runs bounded: one
-named workload, one measured window, then detach.** Always-on is a separate
-decision that needs its own numbers, and should not be assumed to follow from a
-successful deployment.
+**The real risk is write volume, not the media.** Stage 1 measured roughly 400 KB/s
+of probe output for a busy workload. Sustained, that is about **35 GB a day** — on
+the reference host's 240 GB SSD it would fill the disk in roughly a week, and it is
+a meaningful amount of write endurance regardless. "Always-on" is therefore not a
+footnote to this stage; it is a different product, and it needs its numbers before
+anyone assumes it.
 
-## 14. Questions for review
+Revision 1 attributed that write pressure to an SD card on the reference host.
+**That was wrong** — the reference host is a laptop with a SATA SSD and no SD
+device at all. The write-rate argument is unaffected; the media claim was simply
+false, and the hosts that do boot from SD cards are not part of this stage.
 
-1. Is the renumbering in §1 acceptable, or should the deployment fold into
-   Stage 4 as its first half?
-2. Is the advisory/enforced gate the right shape — detection at install *and*
-   every start, a default-no prompt, a recorded consent file, and the level
-   stamped into every terminal record — or is the record more ceremony than the
-   protection warrants? The decision is to deploy in advisory mode and let the
-   user decide; the question is whether this is the honest way to present it.
-3. Supervisor mode only, or is observer mode required before this counts as
-   deployed?
-4. Should retention/rotation be in this stage, or is it Stage 4's first piece?
-   My view: it belongs here, because an unbounded recorder is a disk-full
-   incident, and §10 puts it before the chain for that reason.
-5. Is check 10 (no content beyond the schema) required before deployment, or
-   acceptable as a check run during the first window?
+**CPU.** Three attached probes are measurable load. The Stage 1 run sheet already
+defines the abort threshold for that, and Stage 3 inherits it rather than inventing
+a second one.
+
+## 14. Decisions received, and what remains open
+
+Review of `77892f6` settled all five questions:
+
+| Question | Decision |
+|---|---|
+| Renumbering | Accepted. Deployment is Stage 3; chain/checkpoints move to Stage 4; view/switch to Stage 5. Amend design §16 on approval. |
+| Advisory gate | Right shape, not ceremony — now bound to a privilege fingerprint (§2.5). |
+| Supervisor only | Correct for a first deployment. Observer mode stays a separate stage. |
+| Retention here | Yes, before chain/checkpoints, with the failure semantics now in §8.1. |
+| No-content check | Static gate before install and before every attach (§11.0); runtime scan before reporting. |
+
+Open, and deliberately not decided by this proposal:
+
+- whether Stage 3 ever becomes enabled, which needs its own storage, rotation, CPU
+  and wear measurements;
+- whether option (b) — moving the agent to a dedicated unprivileged account — is
+  undertaken, which is the only route to `enforced` on the reference host.
 
 ## 15. What this does not claim
 
 - It does not claim the agent is contained. On today's account layout it is not,
-  and the system says so to the user's face — at install, at every start, in
-  `status`, and in every run's terminal record (section 2). A user who accepts
-  advisory mode has made an informed choice; nothing here hides it from them.
-- It does not claim the probes are complete. The seven declared gaps from
-  Stage 1 and Stage 2 are unchanged.
+  and the system says so at install, at every start, in `status`, and in every
+  run's terminal record. A user who accepts advisory mode has made an informed
+  choice — and that consent expires when the situation it described changes.
+- It does not claim the probes are complete. The seven declared gaps are unchanged.
 - It does not claim always-on is affordable. Only that one bounded run works.
+- It does not claim a runtime scan compensates for an unsafe probe. Gate 1 exists
+  because it does not: a segment scan cannot unrun a dereference.
 - It does not claim the view exists. It does not.
