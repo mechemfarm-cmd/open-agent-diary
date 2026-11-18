@@ -77,6 +77,11 @@ class RecorderConfig:
     max_bytes: int = DEFAULT_MAX_BYTES
     journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
     recorder_id: str = RECORDER_NAME
+    #: ``filtered`` (the workload-evidence path) or ``control`` (the paired
+    #: unfiltered measurement). Never inferred: the recorder is told which one it
+    #: is, because a silent switch between them would make a control run look like
+    #: evidence about the workload.
+    capture_mode: str = "filtered"
 
     def __post_init__(self) -> None:
         if not self.capture_id:
@@ -85,6 +90,10 @@ class RecorderConfig:
             raise ValueError("duration_s must be positive")
         if not self.probes:
             raise ValueError("at least one probe is required")
+        if self.capture_mode not in {"filtered", "control"}:
+            raise ValueError(
+                f"capture_mode must be filtered or control, got {self.capture_mode!r}"
+            )
 
     def fingerprint_payload(self) -> dict:
         """What was agreed: the recording configuration, not the machine."""
@@ -242,6 +251,7 @@ class Recorder:
                         "scope": scope.name,
                         "protection_level": level.value,
                         "supervisor_mode": "supervisor",
+                        "capture_mode": self.config.capture_mode,
                     },
                 )
             )
@@ -356,7 +366,12 @@ class Recorder:
                     "records": writer.records,
                     "protection_level": level.value,
                     "capture_id": self.config.capture_id,
+                    "capture_mode": self.config.capture_mode,
                     "dropped_this_run": len(dropped),
+                    # The producer counts what the kernel let through; the importer
+                    # counts what arrived. Two layers, two numbers, reconciled
+                    # rather than assumed equal.
+                    "producer_out_of_scope": getattr(producer, "out_of_scope", None),
                 },
             )
         )

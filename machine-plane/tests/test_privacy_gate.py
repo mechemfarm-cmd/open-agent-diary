@@ -25,6 +25,7 @@ GOOD_PROBE = """
 BEGIN { printf("MARK probe=test phase=start ts=%llu\\n", nsecs); }
 
 tracepoint:syscalls:sys_enter_execve
+/cgroup == $1/
 {
     printf("EV exec_attempt pid=%d tid=%d rc=%d cgroup=%llu ts=%llu label=%s\\n",
            pid, tid, args->ret, cgroup, nsecs, comm);
@@ -269,6 +270,62 @@ class TestDereferenceOutsidePrintf(unittest.TestCase):
             any(f.rule == "dereference-outside-printf" for f in inspection.findings),
             [str(f) for f in inspection.findings],
         )
+
+
+class TestScopePredicateIsRequired(unittest.TestCase):
+    r"""A probe without the predicate still attaches — it just captures nothing.
+
+    bpftrace does not fail when the positional argument is missing; it evaluates
+    \$1 as 0 and every EV block silently matches nothing. So the requirement has to
+    be enforced in the grammar, because the kernel will not enforce it.
+    """
+
+    UNFILTERED = """
+tracepoint:syscalls:sys_enter_execve
+{
+    printf("EV exec_attempt pid=%d tid=%d rc=%d cgroup=%llu ts=%llu label=%s\\n",
+           pid, tid, args->ret, cgroup, nsecs, comm);
+}
+"""
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="mp-pred-"))
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self.directory, ignore_errors=True)
+        )
+
+    def write(self, source: str, name: str = "probe.bt") -> Path:
+        path = self.directory / name
+        path.write_text(source, encoding="utf-8")
+        return path
+
+    def rules(self, source: str) -> set[str]:
+        return {f.rule for f in inspect_probe(self.write(source)).findings}
+
+    def test_an_ev_block_without_the_predicate_is_refused(self) -> None:
+        self.assertIn("missing-scope-predicate", self.rules(self.UNFILTERED))
+
+    def test_the_predicate_satisfies_the_rule(self) -> None:
+        self.assertNotIn("missing-scope-predicate", self.rules(GOOD_PROBE))
+
+    def test_a_predicate_combined_with_an_existing_filter_is_accepted(self) -> None:
+        source = self.UNFILTERED.replace(
+            "tracepoint:syscalls:sys_enter_execve\n{",
+            "tracepoint:syscalls:sys_enter_execve\n/@seen[pid, tid] && cgroup == $1/\n{",
+        )
+        self.assertNotIn("missing-scope-predicate", self.rules(source))
+
+    def test_a_widening_predicate_is_refused(self) -> None:
+        source = self.UNFILTERED.replace(
+            "tracepoint:syscalls:sys_enter_execve\n{",
+            "tracepoint:syscalls:sys_enter_execve\n/cgroup != $1/\n{",
+        )
+        self.assertIn("widening-predicate", self.rules(source))
+
+    def test_mark_blocks_do_not_require_the_predicate(self) -> None:
+        """Attachment markers must stay unfiltered, or the signal is circular."""
+        source = 'BEGIN\n{\n    printf("MARK probe=x phase=start ts=%llu\\n", nsecs);\n}\n'
+        self.assertNotIn("missing-scope-predicate", self.rules(source))
 
 
 class TestSchemaAgreement(GateTestCase):

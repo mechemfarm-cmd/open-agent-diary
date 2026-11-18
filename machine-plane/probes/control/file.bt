@@ -1,0 +1,48 @@
+/*
+ * file.bt — file open attempts and outcomes, metadata only.
+ *
+ * Stage 1 probe, machine plane. Reviewed before attach.
+ *
+ * What is captured: pid, tid, cgroup, whether the open was write-intent, the
+ * return value, and a timestamp.
+ *
+ * What is NOT captured, deliberately:
+ *   - the filename pointer (args->filename) — not dereferenced at all
+ *   - file contents, file descriptors' data, or any buffer
+ *   - read/write syscall payloads
+ *
+ * Consequence, stated so nobody reads more into the numbers than they support:
+ * this probe cannot say WHICH file was opened. In Stage 1 the manifest says what
+ * the scripted workload does, so action recall is measured by event class,
+ * cgroup and timing — not by path. Path attribution is a Stage 2 question and
+ * would need its own review.
+ *
+ * O_WRONLY=1, O_RDWR=2, O_CREAT=64 on Linux. A file counts as write-intent if
+ * any of those are set.
+ */
+
+BEGIN
+{
+    printf("MARK probe=file phase=start ts=%llu\n", nsecs);
+}
+
+tracepoint:syscalls:sys_enter_openat
+{
+    @flags[pid, tid] = args->flags;
+}
+
+tracepoint:syscalls:sys_exit_openat
+/@flags[pid, tid]/
+{
+    $f = @flags[pid, tid];
+    $write = (($f & 1) || ($f & 2) || ($f & 64)) ? 1 : 0;
+    printf("EV open pid=%d tid=%d write=%d rc=%d cgroup=%llu ts=%llu label=%s\n",
+           pid, tid, $write, args->ret, cgroup, nsecs, comm);
+    delete(@flags[pid, tid]);
+}
+
+END
+{
+    printf("MARK probe=file phase=end ts=%llu\n", nsecs);
+    clear(@flags);
+}

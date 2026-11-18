@@ -20,7 +20,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import EventType, MachineEvent, event_kind, EventKind
+from .accounting import (
+    Counts,
+    EventClass,
+    classify,
+    is_in_scope,
+)
+from .events import EventType, MachineEvent
 from .spool import Spool, SpoolError
 
 #: Detail keys the recorder writes on its own lifecycle records. These are ours,
@@ -34,6 +40,8 @@ LIFECYCLE_KEYS = frozenset(
         "supervisor_mode",
         "records",
         "dropped_this_run",
+        "capture_mode",
+        "producer_out_of_scope",
         "error",
         "sealed_on_recovery",
         "max_results",
@@ -55,6 +63,8 @@ NUMERIC_OR_ENUM_KEYS = frozenset(
         "write",
         "records",
         "dropped_this_run",
+        "capture_mode",
+        "producer_out_of_scope",
         "protection_level",
         "supervisor_mode",
         "probe",
@@ -157,7 +167,7 @@ def scan_segment(
             result.findings.append(Find(index, "unreadable-event", str(error)))
             continue
 
-        is_action = event_kind(event.type) is EventKind.ACTION
+        is_action = classify(event.type) is EventClass.ACTION
         if is_action:
             result.action_records += 1
 
@@ -206,93 +216,105 @@ def gate2(segment: str | Path, *, recorder_id: str, probe_fields: set[str]) -> S
     return scan_segment(segment, recorder_id=recorder_id, allowed_detail_keys=probe_fields)
 
 
-@dataclass
-class Accounting:
-    """The counters behind a segment, named separately so they reconcile.
-
-    A single "records" number hides which population it describes. These are
-    defined so the equation can be checked rather than asserted:
-
-        records  ==  lifecycle + action + gaps
-        imported + duplicates + refused  ==  records
-
-    ``lifecycle`` covers ``recorder_started``, ``recorder_stopped`` and the other
-    gap-class events, which are the recorder's own bookkeeping rather than
-    observations by a probe.
-    """
-
-    segment: str
-    records: int = 0
-    lifecycle: int = 0
-    action: int = 0
-    gaps: int = 0
-    imported: int = 0
-    duplicates: int = 0
-    #: Records below the checkpoint, imported by an earlier run. Without this
-    #: the equation fails on every re-run, which looks like loss and is not.
-    already: int = 0
-
-    @property
-    def consistent(self) -> bool:
-        return self.records == self.lifecycle + self.action + self.gaps
-
-    def line(self) -> str:
-        return (
-            f"{self.segment}: records {self.records} = "
-            f"lifecycle {self.lifecycle} + action {self.action} + gaps {self.gaps}; "
-            f"imported {self.imported} + duplicates {self.duplicates}"
-        )
-
-
 def account_segment(
-    path: str | Path, *, recorder_id: str, checkpoint_offset: int = 0
-) -> tuple[Accounting, list[MachineEvent]]:
-    """Count a segment by category, returning the events as well."""
+    path: str | Path,
+    *,
+    recorder_id: str,
+    checkpoint_offset: int = 0,
+    expected_scope: str | None = None,
+) -> tuple[Counts, list[MachineEvent], int]:
+    """Classify a segment with the disjoint partition, and attribute its actions.
+
+    Returns ``(counts, events, already)``. ``already`` is the number of records
+    below a resumed checkpoint — a separate population, because otherwise a
+    re-import reads as loss.
+
+    **The scope inode comes from the segment, not from the caller.** The recorder
+    measured it and stamped it into the ``RECORDER_STARTED`` header, so it is the
+    authoritative value and the same one the kernel predicate was given. An
+    operator-supplied number would be a second source of truth that could disagree
+    with what actually ran.
+
+    ``expected_scope`` is therefore a *check*, not an input: if supplied, the
+    segment's own scope name must match it, and a mismatch is refused rather than
+    attributed against the wrong run.
+
+    Classification uses :func:`machine_plane.accounting.classify`, **not** the
+    schema's ``event_kind()``. The schema treats every recorder and coverage event
+    as a gap; this partition separates recorder bookkeeping from coverage loss, and
+    counting with the broader notion would both break the equation and hide which
+    of the two occurred.
+    """
     segment = Path(path)
-    counts = Accounting(segment=segment.name)
-    events: list[MachineEvent] = []
+    parsed: list[MachineEvent] = []
+    already = 0
+    unreadable = 0
 
     for _start, end_offset, envelope in Spool(segment, recorder_id).read_from(0):
-        counts.records += 1
         if end_offset <= checkpoint_offset:
-            counts.already += 1
+            already += 1
         try:
-            event = MachineEvent.from_dict(envelope.event)
-        except Exception:  # noqa: BLE001 - counted, and the scan reports it
-            counts.gaps += 1
-            continue
-        events.append(event)
-        if event.type in {
-            EventType.RECORDER_STARTED,
-            EventType.RECORDER_STOPPED,
-            EventType.BUFFER_OVERFLOW,
-            EventType.PERMISSION_GAP,
-            EventType.UNSUPPORTED_KERNEL_FEATURE,
-            EventType.SINK_UNAVAILABLE,
-            EventType.CLOCK_JUMP,
-        }:
-            counts.lifecycle += 1
-        else:
-            counts.action += 1
+            parsed.append(MachineEvent.from_dict(envelope.event))
+        except Exception:  # noqa: BLE001 - counted as a gap, and Gate 2 reports it
+            unreadable += 1
 
-    return counts, events
+    # The run's own header carries the join key.
+    scope_inode: str | None = None
+    header_scope: str | None = None
+    header_mode: str | None = None
+    for event in parsed:
+        if event.type is EventType.RECORDER_STARTED:
+            details = dict(event.platform_details)
+            raw_inode = details.get("cgroup_inode")
+            if raw_inode is not None:
+                scope_inode = str(raw_inode)
+            header_scope = details.get("scope")
+            header_mode = details.get("capture_mode")
+            break
+
+    if expected_scope is not None and header_scope is not None and header_scope != expected_scope:
+        raise ValueError(
+            f"segment belongs to scope {header_scope!r}, not the expected "
+            f"{expected_scope!r}"
+        )
+
+    counts = Counts(
+        scope_in_segment=scope_inode,
+        scope_requested=expected_scope is not None,
+        capture_mode=header_mode or "filtered",
+    )
+    counts.gaps += unreadable
+    counts.unreadable += unreadable
+
+    for event in parsed:
+        event_class = classify(event.type)
+        counts.add_record(event_class)
+        if event_class is EventClass.ACTION:
+            # Unmatched means the record cannot be attributed at all: no identity,
+            # or an identity with no isolation domain. Both are different from an
+            # identity that simply belongs to another scope.
+            domain = event.identity.isolation_domain if event.identity else None
+            if event.identity is None or domain is None:
+                counts.add_attribution(None)
+            else:
+                counts.add_attribution(is_in_scope(event.identity, scope_inode))
+
+    return counts, parsed, already
 
 
-def attribution(events: list[MachineEvent], *, scope: str | None) -> tuple[int, int]:
-    """How many events belong to the named scope, and how many do not.
+def attribution(events: list[MachineEvent], *, scope: str | int | None) -> tuple[int, int]:
+    """In-scope and out-of-scope action counts, using the normative rule.
 
-    The probes are host-wide. Until they are filtered, most of what a capture
-    contains belongs to something else on the machine, and a claim about what the
-    workload did must not be read from the total.
+    Kept for callers that already hold the events; it delegates to ``is_in_scope``
+    so there is one scope rule in Python rather than two.
     """
-    matched = 0
-    unmatched = 0
+    in_scope = 0
+    out_of_scope = 0
     for event in events:
-        if event.identity is None or event.identity.isolation_domain is None:
-            unmatched += 1
+        if classify(event.type) is not EventClass.ACTION:
             continue
-        if scope is not None and event.identity.isolation_domain.scope == scope:
-            matched += 1
+        if is_in_scope(event.identity, scope):
+            in_scope += 1
         else:
-            unmatched += 1
-    return matched, unmatched
+            out_of_scope += 1
+    return in_scope, out_of_scope

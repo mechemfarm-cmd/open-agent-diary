@@ -1,0 +1,43 @@
+/*
+ * net.bt — connection attempts and outcomes, metadata only.
+ *
+ * Stage 1 probe, machine plane. Reviewed before attach.
+ *
+ * What is captured: pid, tid, cgroup, return value, timestamp. That is all.
+ *
+ * What is NOT captured, deliberately:
+ *   - the sockaddr pointer — not dereferenced
+ *   - IP addresses, ports, hostnames
+ *   - packet payloads of any kind
+ *   - plaintext model traffic
+ *
+ * Consequence: this probe records THAT a connect was attempted and whether it
+ * succeeded, not WHERE to. The Stage 1 workload connects only to a loopback
+ * endpoint, so the destination is known from the manifest and does not need to
+ * be observed. Any later measurement of external destinations is a separate
+ * decision with its own privacy argument.
+ */
+
+BEGIN
+{
+    printf("MARK probe=net phase=start ts=%llu\n", nsecs);
+}
+
+tracepoint:syscalls:sys_enter_connect
+{
+    @attempt[pid, tid] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_connect
+/@attempt[pid, tid]/
+{
+    printf("EV connect pid=%d tid=%d rc=%d cgroup=%llu ts=%llu label=%s\n",
+           pid, tid, args->ret, cgroup, nsecs, comm);
+    delete(@attempt[pid, tid]);
+}
+
+END
+{
+    printf("MARK probe=net phase=end ts=%llu\n", nsecs);
+    clear(@attempt);
+}

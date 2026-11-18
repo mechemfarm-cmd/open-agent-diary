@@ -54,6 +54,19 @@ from ..producer import Producer, RawEvent
 
 #: Sensor event names this producer understands. Anything else that presents as an
 #: event is reported as a gap rather than skipped.
+def _same_cgroup(left: object, right: object) -> bool:
+    """Numeric equality, the same rule accounting.is_in_scope applies.
+
+    String comparison treats "007" and "7" as different cgroups, which would count an
+    in-scope record as out of scope and make the producer's number disagree with the
+    importer's for reasons unrelated to scope.
+    """
+    try:
+        return int(str(left).strip()) == int(str(right).strip())
+    except (TypeError, ValueError):
+        return False
+
+
 KNOWN_EVENT_NAMES = frozenset({"exec_attempt", "exec_started", "open", "connect"})
 
 #: Which correlation *subjects* each sensor event can produce.
@@ -223,6 +236,42 @@ class LinuxEBPFProducer(Producer):
         """Probe names as the scripts announce them in their start marker."""
         return {Path(path).stem for path in self._probe_paths}
 
+    @property
+    def out_of_scope(self) -> int:
+        """Records the kernel filter let through that are not the scope.
+
+        This is the producer's own count, independent of the importer's. The kernel
+        predicate should make it zero; the point of counting it here is that the
+        number exists somewhere other than the layer that is being checked. A
+        re-check performed only by the importer would agree with itself.
+        """
+        return getattr(self, "_out_of_scope", 0)
+
+    def scope_argument(self) -> str:
+        """The measured cgroup inode, as the probes' positional argument.
+
+        The probes' predicate is ``/cgroup == $1/``. Passing this is what makes
+        the capture narrow; omitting it does **not** fail — bpftrace evaluates an
+        absent ``$1`` as 0, every EV block matches nothing, and the run produces a
+        successful-looking empty capture. That is why the argument is derived
+        here, required here, and asserted on each child's argv below.
+        """
+        if len(self._scope_by_cgroup) != 1:
+            raise ValueError(
+                "live capture needs exactly one cgroup->scope entry to derive the "
+                f"probe argument; got {len(self._scope_by_cgroup)}"
+            )
+        inode = next(iter(self._scope_by_cgroup))
+        try:
+            int(inode)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"cgroup inode {inode!r} is not an integer, so it cannot match the "
+                "kernel predicate's numeric comparison"
+            ) from error
+        self._scope_inode = str(inode)
+        return str(inode)
+
     def require_live_prerequisites(self) -> None:
         """Check that this process can actually attach the probes.
 
@@ -252,6 +301,8 @@ class LinuxEBPFProducer(Producer):
                 "inode, but correlation matches runs on isolation_domain.scope. "
                 "Without the map every event is unmatchable."
             )
+        # Fail before attaching rather than after producing an empty capture.
+        self.scope_argument()
 
     def collect(self) -> Iterable[RawEvent]:
         """Yield parsed events from a captured log, or from live probes."""
@@ -264,6 +315,8 @@ class LinuxEBPFProducer(Producer):
             raise ValueError("probe_paths are required unless captured_log_path is set")
 
         self.require_live_prerequisites()
+        scope_argument = self.scope_argument()
+        self._out_of_scope = 0
 
         # One process per probe script. A single invocation given several scripts
         # runs only the first and silently ignores the rest.
@@ -272,11 +325,18 @@ class LinuxEBPFProducer(Producer):
         try:
             for path in self._probe_paths:
                 process = subprocess.Popen(
-                    [self._bpftrace, path],
+                    [self._bpftrace, path, scope_argument],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                # The runtime half of the guarantee: the source carries the
+                # predicate (Gate 1) and the invocation carries the value (here).
+                # Neither implies the other.
+                if process.args[-1] != scope_argument:
+                    raise RuntimeError(
+                        f"{path}: probe was not given the scope argument"
+                    )
                 processes.append(process)
                 self._live_processes.append(process)
                 # Drain stderr continuously. Leaving it unread until the process
@@ -517,6 +577,17 @@ class LinuxEBPFProducer(Producer):
         )
 
     def normalize(self, raw: RawEvent) -> MachineEvent:
+        """Map a sensor event, counting anything the filter should have excluded."""
+        event = self._normalize(raw)
+        inode = getattr(self, "_scope_inode", None)
+        if inode is not None and event.identity is not None:
+            domain = event.identity.isolation_domain
+            observed = getattr(domain, "id", None) if domain is not None else None
+            if observed is not None and not _same_cgroup(observed, inode):
+                self._out_of_scope += 1
+        return event
+
+    def _normalize(self, raw: RawEvent) -> MachineEvent:
         """Map a sensor event to the neutral machine-plane schema."""
         if isinstance(raw.type, EventType):
             # Already a gap event built by the parser.
