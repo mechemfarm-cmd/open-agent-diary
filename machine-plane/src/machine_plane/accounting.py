@@ -32,6 +32,24 @@ LIFECYCLE_TYPES = frozenset(
     }
 )
 
+#: Everything the workload itself did. Enumerated rather than "anything not in the
+#: other two sets", because a fallthrough default is how a new event type enters the
+#: action population unnoticed: both equations still balance, the totals still add up,
+#: and the error is invisible. An unclassified type raises instead.
+ACTION_TYPES = frozenset(
+    {
+        EventType.EXEC,
+        EventType.OPEN,
+        EventType.READ_ATTEMPT,
+        EventType.WRITE_ATTEMPT,
+        EventType.CREATE,
+        EventType.RENAME,
+        EventType.UNLINK,
+        EventType.METADATA_CHANGE,
+        EventType.CONNECT,
+    }
+)
+
 #: Everything the recorder reports because it could not see. Each of these is a
 #: gap in coverage, and none of them belongs in ``lifecycle``.
 GAP_TYPES = frozenset(
@@ -52,17 +70,23 @@ class EventClass(str, Enum):
 
 
 def classify(event_type: EventType) -> EventClass:
-    """Exactly one class per event type.
+    """Exactly one class per event type, or an error.
 
-    The order matters only for readability; the sets are disjoint by construction
-    and a test asserts that, because a type added to two sets later would otherwise
-    silently double-count.
+    Three explicit sets, no default. A type that belongs to none of them is a
+    schema change this module has not been taught about, and the honest response is
+    to stop rather than to file it under ``action`` and let the equations balance
+    over a population nobody chose.
     """
     if event_type in LIFECYCLE_TYPES:
         return EventClass.LIFECYCLE
+    if event_type in ACTION_TYPES:
+        return EventClass.ACTION
     if event_type in GAP_TYPES:
         return EventClass.GAP
-    return EventClass.ACTION
+    raise ValueError(
+        f"event type {event_type!r} belongs to no accounting class — add it to "
+        "LIFECYCLE_TYPES, ACTION_TYPES or GAP_TYPES in accounting.py"
+    )
 
 
 def is_in_scope(identity: ProcessIdentity | None, scope_inode: str | int | None) -> bool:
@@ -101,7 +125,13 @@ class Counts:
     in_scope_actions: int = 0
     out_of_scope_actions: int = 0
     unmatched_actions: int = 0
-    scope_supplied: bool = False
+    #: The inode the segment records in its own header — what the kernel predicate
+    #: was given. Present means attribution is computable; absent means it is not.
+    scope_in_segment: str | None = None
+    #: Whether the importer was asked to check against a particular scope. This is a
+    #: separate fact from the above: a segment can carry a scope the caller never
+    #: named, and reporting those as "unattributed" contradicts the per-segment counts.
+    scope_requested: bool = False
     #: Records that could not be parsed at all. Counted as gaps, listed separately
     #: so a corrupt segment is visible as its own number.
     unreadable: int = 0
@@ -143,17 +173,32 @@ class Counts:
             self.out_of_scope_actions += 1
 
     def attribution_label(self) -> str:
-        """What may honestly be said about this population.
+        """What may honestly be said about this population, and on what basis.
 
-        ``unattributed`` and ``in_scope 0`` are different claims: one says nobody
-        supplied a scope, the other says a scope was supplied and nothing matched.
-        Printing the second for the first misrepresents evidence.
+        Three distinct facts, previously collapsed into one flag:
+
+        * the segment may record a scope (so attribution is computable),
+        * the caller may or may not have asked for a particular scope,
+        * and the counts may or may not support a claim about the workload.
+
+        Reporting "unattributed" while the per-segment line prints in-scope counts
+        was the contradiction: both were true statements about different things,
+        printed as if they were the same thing.
         """
-        if not self.scope_supplied:
-            return f"unattributed ({self.action} action records, no scope supplied)"
+        if self.scope_in_segment is None:
+            return (
+                f"unattributed ({self.action} action records; the segment records no "
+                "scope cgroup, so nothing can be claimed as the workload's)"
+            )
+        basis = (
+            f"scope {self.scope_in_segment} from the segment header; --scope not "
+            "requested, so this is what the kernel was told to capture"
+            if not self.scope_requested
+            else f"scope {self.scope_in_segment}, matches --scope"
+        )
         return (
             f"in_scope {self.in_scope_actions} / out_of_scope {self.out_of_scope_actions}"
-            f" / unmatched {self.unmatched_actions}"
+            f" / unmatched {self.unmatched_actions} — {basis}"
         )
 
     def report_lines(self) -> list[str]:

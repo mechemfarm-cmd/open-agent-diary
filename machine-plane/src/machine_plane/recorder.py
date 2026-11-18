@@ -357,6 +357,10 @@ class Recorder:
                     "protection_level": level.value,
                     "capture_id": self.config.capture_id,
                     "dropped_this_run": len(dropped),
+                    # The producer counts what the kernel let through; the importer
+                    # counts what arrived. Two layers, two numbers, reconciled
+                    # rather than assumed equal.
+                    "producer_out_of_scope": getattr(producer, "out_of_scope", None),
                 },
             )
         )

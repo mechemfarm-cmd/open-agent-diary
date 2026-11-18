@@ -113,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         print("no sealed segments to import")
         return 0
 
-    totals = Counts(scope_supplied=args.scope is not None)
+    totals = Counts(scope_requested=args.scope is not None)
+    segment_scopes: set[str] = set()
     imported_total = duplicates_total = refused_records = already_total = 0
     refused: list[str] = []
 
@@ -180,9 +181,12 @@ def main(argv: list[str] | None = None) -> int:
         duplicates_total += result.duplicates
         already_total += already
         accumulate(totals, counts)
+        if counts.scope_in_segment is not None:
+            segment_scopes.add(counts.scope_in_segment)
         for line in counts.report_lines():
             print(f"  {line}")
 
+    totals.scope_in_segment = next(iter(segment_scopes)) if len(segment_scopes) == 1 else None
     print()
     for line in totals.report_lines():
         print(line)
@@ -195,9 +199,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"store     : {store.path}")
 
-    if args.scope is None:
-        print("  NOTE: no scope supplied — these records are unattributed and must not")
-        print("        be read as evidence of what the workload did.")
+    if args.scope is None and segment_scopes:
+        print("  NOTE: no --scope given. Attribution above is relative to each segment's")
+        print("        own recorded scope — the value the kernel predicate was given —")
+        print("        not to a scope you chose. It says what was captured, not what ran.")
 
     if refused:
         print(f"\nrefused segments: {len(refused)} — not imported as evidence",

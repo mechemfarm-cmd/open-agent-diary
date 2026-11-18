@@ -40,6 +40,7 @@ LIFECYCLE_KEYS = frozenset(
         "supervisor_mode",
         "records",
         "dropped_this_run",
+        "producer_out_of_scope",
         "error",
         "sealed_on_recovery",
         "max_results",
@@ -61,6 +62,7 @@ NUMERIC_OR_ENUM_KEYS = frozenset(
         "write",
         "records",
         "dropped_this_run",
+        "producer_out_of_scope",
         "protection_level",
         "supervisor_mode",
         "probe",
@@ -272,7 +274,10 @@ def account_segment(
             f"{expected_scope!r}"
         )
 
-    counts = Counts(scope_supplied=scope_inode is not None)
+    counts = Counts(
+        scope_in_segment=scope_inode,
+        scope_requested=expected_scope is not None,
+    )
     counts.gaps += unreadable
     counts.unreadable += unreadable
 

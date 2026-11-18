@@ -101,7 +101,7 @@ class TestCounts(unittest.TestCase):
         counts = Counts(action=5)
         counts.unmatched_actions = 5
         self.assertIn("unattributed", counts.attribution_label())
-        counts.scope_supplied = True
+        counts.scope_in_segment = "385715"
         self.assertIn("in_scope 0", counts.attribution_label())
 
 
@@ -201,7 +201,7 @@ class TestSegmentAccounting(unittest.TestCase):
     def test_no_header_means_attribution_is_unknown(self) -> None:
         path = self.segment([self.event(EventType.OPEN)])
         counts, _, _ = account_segment(path, recorder_id="machine-plane-recorder")
-        self.assertFalse(counts.scope_supplied)
+        self.assertIsNone(counts.scope_in_segment)
         self.assertIn("unattributed", counts.attribution_label())
 
     def test_a_mismatched_scope_name_is_refused(self) -> None:
@@ -216,3 +216,61 @@ class TestSegmentAccounting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestNoScopeReportingIsConsistent(unittest.TestCase):
+    def test_a_segment_scope_without_a_requested_scope_is_not_called_unattributed(
+        self,
+    ) -> None:
+        from machine_plane.accounting import Counts
+
+        counts = Counts(scope_in_segment="385715", scope_requested=False)
+        counts.action = 2
+        counts.in_scope_actions = 2
+        label = counts.attribution_label()
+        self.assertNotIn("unattributed", label)
+        self.assertIn("in_scope 2", label)
+        self.assertIn("--scope not", label)
+
+    def test_no_scope_in_the_segment_is_unattributed(self) -> None:
+        from machine_plane.accounting import Counts
+
+        counts = Counts()
+        counts.action = 3
+        self.assertIn("unattributed", counts.attribution_label())
+
+    def test_a_requested_scope_is_reported_as_matched(self) -> None:
+        from machine_plane.accounting import Counts
+
+        counts = Counts(scope_in_segment="385715", scope_requested=True)
+        self.assertIn("matches --scope", counts.attribution_label())
+
+
+class TestClassificationIsClosed(unittest.TestCase):
+    def test_every_event_type_in_the_schema_is_classified(self) -> None:
+        """A new EventType must break this test, not slip into a population."""
+        from machine_plane.accounting import ACTION_TYPES, GAP_TYPES, LIFECYCLE_TYPES
+        from machine_plane.events import EventType
+
+        covered = LIFECYCLE_TYPES | ACTION_TYPES | GAP_TYPES
+        missing = [member.name for member in EventType if member not in covered]
+        self.assertEqual(
+            missing,
+            [],
+            f"event types with no accounting class: {missing} — add them to "
+            "accounting.py before the equations can be trusted",
+        )
+
+    def test_an_unclassified_type_fails_closed(self) -> None:
+        from machine_plane.accounting import classify
+
+        with self.assertRaises(ValueError):
+            classify("some_future_event")
+
+    def test_a_new_gap_type_cannot_enter_the_action_population(self) -> None:
+        """The specific failure: default-to-ACTION would balance while lying."""
+        from machine_plane.accounting import ACTION_TYPES, GAP_TYPES
+
+        for member in GAP_TYPES:
+            self.assertNotIn(member, ACTION_TYPES)
+
+

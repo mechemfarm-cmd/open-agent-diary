@@ -223,6 +223,17 @@ class LinuxEBPFProducer(Producer):
         """Probe names as the scripts announce them in their start marker."""
         return {Path(path).stem for path in self._probe_paths}
 
+    @property
+    def out_of_scope(self) -> int:
+        """Records the kernel filter let through that are not the scope.
+
+        This is the producer's own count, independent of the importer's. The kernel
+        predicate should make it zero; the point of counting it here is that the
+        number exists somewhere other than the layer that is being checked. A
+        re-check performed only by the importer would agree with itself.
+        """
+        return getattr(self, "_out_of_scope", 0)
+
     def scope_argument(self) -> str:
         """The measured cgroup inode, as the probes' positional argument.
 
@@ -245,6 +256,7 @@ class LinuxEBPFProducer(Producer):
                 f"cgroup inode {inode!r} is not an integer, so it cannot match the "
                 "kernel predicate's numeric comparison"
             ) from error
+        self._scope_inode = str(inode)
         return str(inode)
 
     def require_live_prerequisites(self) -> None:
@@ -291,6 +303,7 @@ class LinuxEBPFProducer(Producer):
 
         self.require_live_prerequisites()
         scope_argument = self.scope_argument()
+        self._out_of_scope = 0
 
         # One process per probe script. A single invocation given several scripts
         # runs only the first and silently ignores the rest.
@@ -551,6 +564,17 @@ class LinuxEBPFProducer(Producer):
         )
 
     def normalize(self, raw: RawEvent) -> MachineEvent:
+        """Map a sensor event, counting anything the filter should have excluded."""
+        event = self._normalize(raw)
+        inode = getattr(self, "_scope_inode", None)
+        if inode is not None and event.identity is not None:
+            domain = event.identity.isolation_domain
+            observed = getattr(domain, "id", None) if domain is not None else None
+            if observed is not None and str(observed) != inode:
+                self._out_of_scope += 1
+        return event
+
+    def _normalize(self, raw: RawEvent) -> MachineEvent:
         """Map a sensor event to the neutral machine-plane schema."""
         if isinstance(raw.type, EventType):
             # Already a gap event built by the parser.
