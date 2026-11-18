@@ -140,6 +140,27 @@ information. Neither would have been caught by unit tests at the module boundary
 which is why the tests added here assert the seam (an event resolving to a
 registered run; a gap changing a coverage verdict) rather than the fields.
 
+### Outcome
+
+Alice's review approved Stage 2 at `495e48d` / `b64fd7e` for the current scope:
+the producer and the demonstrated ingestion boundary. Two non-blocking notes
+followed, both fixed at `575e307`:
+
+- **stderr attribution.** `_collected_stderr` received a process and then ignored
+  it, returning the first non-empty buffer. With three probes attached, one
+  probe's error text could be reported against another — and that text is the only
+  thing identifying which probe misbehaved.
+- **unclosed pipes.** Our subprocess pipes were left to the garbage collector and
+  surfaced as `ResourceWarning`s. `collect()` now closes them in its `finally`,
+  verified by running the suite under `-W error::ResourceWarning` rather than by
+  scanning output for the absence of a message.
+
+**What is not approved, and must not be read as approved:** this covers the
+producer and the demonstrated boundary. A privileged live deployment — the
+recorder running as root under a supervisor, attaching real probes on a real host
+— still needs its own implementation and its own acceptance checks. Nothing here
+attaches a probe, and the live path is exercised only against stubs.
+
 ## 3. The declared gaps
 
 From the Stage 1 result. Each is a capability the producer reports as
