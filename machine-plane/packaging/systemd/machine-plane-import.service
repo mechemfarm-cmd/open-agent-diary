@@ -1,0 +1,23 @@
+[Unit]
+Description=Machine plane importer (reads sealed segments, writes the store)
+Documentation=file:/usr/share/doc/machine-plane/stage3.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+User=mp-import
+Group=mp-import
+SupplementaryGroups=mp-read
+ExecStart=/usr/local/bin/machine-plane-import --spool /var/lib/machine-plane/spool
+TimeoutStartSec=300
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/var/lib/machine-plane/spool
+ReadWritePaths=/var/lib/machine-plane/store
+
+[Install]
+# Deliberately absent: ingestion is invoked after a run, not on a schedule.

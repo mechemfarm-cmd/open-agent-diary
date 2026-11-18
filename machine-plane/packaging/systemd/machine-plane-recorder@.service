@@ -1,0 +1,36 @@
+[Unit]
+Description=Machine plane recorder (one bounded capture, instance = capture id)
+Documentation=file:/usr/share/doc/machine-plane/stage3.md
+# The recorder is a one-shot supervision of a named workload. It is started by
+# hand with an instance name and it exits when the run ends. There is no
+# [Install] section on purpose: nothing may enable this at boot, because an
+# enabled recorder is an always-on writer and that is a separate decision.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+User=root
+ExecStart=/usr/local/bin/machine-plane-recorder record \
+    --capture-id=%i \
+    --duration=60 \
+    --workload=/usr/bin/sleep 60
+TimeoutStartSec=180
+# Attaching needs these and nothing else.
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_RESOURCE
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=no
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/machine-plane/spool
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+# Deliberately absent. `systemctl enable` must have nothing to install.

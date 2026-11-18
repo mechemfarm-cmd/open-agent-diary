@@ -1,0 +1,412 @@
+"""The machine-plane event record.
+
+Every event carries its own provenance — producer, producer version, platform,
+capabilities at capture, privacy mode, coverage state and confidence — so that
+downstream code can never treat a partial Windows or macOS event as equivalent
+to a richer Linux one.
+
+File and network semantics are kept distinct on purpose. A single
+``file_changed`` would erase the difference between opening a file for writing
+and actually modifying its contents, and that difference is exactly what makes
+an effect worth investigating.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+from .capabilities import CapabilityReport
+from .identity import IdentityConfidence, ProcessIdentity
+from .privacy import FORBIDDEN_CONTENT_KEYS
+
+SCHEMA_VERSION = 2
+
+
+class SchemaMismatch(Exception):
+    """Raised when a record's schema version is not one we can read.
+
+    Ingestion fails closed. Skipping an unreadable record would make it
+    indistinguishable from an event that never happened.
+    """
+
+
+class EventKind(str, Enum):
+    ACTION = "action"
+    GAP = "gap"
+
+
+class EventType(str, Enum):
+    # Observed effects
+    EXEC = "exec"
+    OPEN = "open"
+    READ_ATTEMPT = "read_attempt"
+    WRITE_ATTEMPT = "write_attempt"
+    CREATE = "create"
+    RENAME = "rename"
+    UNLINK = "unlink"
+    METADATA_CHANGE = "metadata_change"
+    CONNECT = "connect"
+
+    # Recorder lifecycle and coverage gaps
+    RECORDER_STARTED = "recorder_started"
+    RECORDER_STOPPED = "recorder_stopped"
+    BUFFER_OVERFLOW = "buffer_overflow"
+    PERMISSION_GAP = "permission_gap"
+    UNSUPPORTED_KERNEL_FEATURE = "unsupported_kernel_feature"
+    SINK_UNAVAILABLE = "sink_unavailable"
+    CLOCK_JUMP = "clock_jump"
+
+
+ACTION_EVENT_TYPES = frozenset(
+    {
+        EventType.EXEC,
+        EventType.OPEN,
+        EventType.READ_ATTEMPT,
+        EventType.WRITE_ATTEMPT,
+        EventType.CREATE,
+        EventType.RENAME,
+        EventType.UNLINK,
+        EventType.METADATA_CHANGE,
+        EventType.CONNECT,
+    }
+)
+
+#: Events that mean the recorder could not see, rather than that nothing
+#: happened. **Deliberately incomplete as a coverage contract.** There is no
+#: distinct disk-full or dropped-events type: disk-full is reported as
+#: ``SINK_UNAVAILABLE`` with a ``CoverageNote.lost`` count, and recovery is
+#: carried by ``CoverageNote.recovered_at`` on the gap itself rather than by a
+#: separate marker. Treat this set as a start, not as a taxonomy that covers
+#: every way coverage can fail, and extend it when a producer needs a
+#: distinction the current set cannot express.
+GAP_EVENT_TYPES = frozenset(
+    {
+        EventType.RECORDER_STARTED,
+        EventType.RECORDER_STOPPED,
+        EventType.BUFFER_OVERFLOW,
+        EventType.PERMISSION_GAP,
+        EventType.UNSUPPORTED_KERNEL_FEATURE,
+        EventType.SINK_UNAVAILABLE,
+        EventType.CLOCK_JUMP,
+    }
+)
+
+#: File event types whose ``target`` is a path.
+PATH_EVENT_TYPES = frozenset(
+    {
+        EventType.OPEN,
+        EventType.READ_ATTEMPT,
+        EventType.WRITE_ATTEMPT,
+        EventType.CREATE,
+        EventType.RENAME,
+        EventType.UNLINK,
+        EventType.METADATA_CHANGE,
+        # EXEC belongs here for the same reason as the rest: its target is a
+        # pathname. It was missing, so an exec target passed through redaction
+        # untouched — and because the exec pathname is the one pointer read the
+        # probe set is approved to take, that left exactly the approved path as
+        # the one path stored in full.
+        EventType.EXEC,
+    }
+)
+
+
+class PrivacyMode(str, Enum):
+    METADATA_ONLY = "metadata_only"
+    CONTENT_BEARING = "content_bearing"
+
+
+class CoverageState(str, Enum):
+    COVERED = "covered"
+    GAP = "gap"
+    UNKNOWN = "unknown"
+
+
+class TargetState(str, Enum):
+    """Why a target is what it is.
+
+    ``None`` on its own is ambiguous, and the ambiguity is not harmless: it can
+    mean the action genuinely had no target, that a target was removed by
+    redaction, or that nobody recorded one. Treating those as the same thing
+    lets a redacted private path "agree" with a targetless claim, which is a
+    confirmed match the system has not earned.
+    """
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    REDACTED = "redacted"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class CoverageNote:
+    """Structured detail attached to a gap event.
+
+    A gap with no scope is a claim of *global* blindness, and that is almost
+    never true: losing file tracing does not invalidate an exec observation.
+    A gap with no end is likewise a claim that the recorder stayed blind
+    forever, which a recovered buffer overflow does not mean.
+    """
+
+    #: Capability or event-type names this gap applies to. Empty means the
+    #: producer did not scope it, which callers must treat as unscoped rather
+    #: than as everything.
+    affected: tuple[str, ...] = ()
+    #: When coverage resumed, if the producer knows.
+    recovered_at: float | None = None
+    #: How many events were lost, if counted.
+    lost: int | None = None
+    #: Which recorder reported this gap. ``None`` means the producer did not
+    #: say, which the single-recorder skeleton currently allows — Stage 1 must
+    #: treat that as a limitation rather than assume one recorder exists.
+    producer: str | None = None
+
+    @property
+    def scoped(self) -> bool:
+        return bool(self.affected)
+
+    def to_dict(self) -> dict:
+        return {
+            "affected": list(self.affected),
+            "recovered_at": self.recovered_at,
+            "lost": self.lost,
+            "producer": self.producer,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict | None) -> "CoverageNote | None":
+        if not payload:
+            return None
+        return cls(
+            affected=tuple(payload.get("affected") or ()),
+            recovered_at=payload.get("recovered_at"),
+            lost=payload.get("lost"),
+            producer=payload.get("producer"),
+        )
+
+
+def target_is_consistent(target: str | None, state: "TargetState") -> bool:
+    """Whether a target and its state can both be true.
+
+    The legal matrix, in one place so the event, the claim and the adapter
+    cannot drift apart:
+
+    ``PRESENT``
+        a target is required.
+    ``ABSENT``
+        no target, and there genuinely was none.
+    ``REDACTED``
+        no target, because policy removed one.
+    ``UNKNOWN``
+        no target, and nobody recorded why.
+
+    ABSENT, REDACTED and UNKNOWN all carry no value. That is precisely why the
+    state exists, since ``None`` alone cannot tell them apart.
+
+    A state that carries a *transformed* value is deliberately not defined: if a
+    future producer needs one, it should be a distinct state rather than a
+    REDACTED that sometimes has a value.
+    """
+    return (target is not None) is (state is TargetState.PRESENT)
+
+
+def event_kind(event_type: EventType) -> EventKind:
+    return EventKind.GAP if event_type in GAP_EVENT_TYPES else EventKind.ACTION
+
+
+class ExecOutcome(str, Enum):
+    """Whether an exec observation is an attempt or a completed transition."""
+
+    ATTEMPTED = "attempted"
+    SUCCEEDED = "succeeded"
+
+
+#: Results that mean the operation completed. Anything else — an error string, a
+#: missing result, an unrecognised value — is not a completed transition.
+_SUCCESS_RESULTS = frozenset({"ok", "success", "succeeded", "0"})
+
+
+def exec_outcome(event: "MachineEvent") -> ExecOutcome:
+    """Classify an EXEC event as an attempt or a completed image transition.
+
+    A producer watching ``execve`` entry records attempts, and one command can
+    produce a dozen failed ``$PATH`` probes before the real binary runs — the
+    Stage 0 probe measured 16 entries and 15 failures for a single
+    ``/usr/bin/env echo hi``. Only a producer that observes the outcome can claim
+    a transition, and ``result`` is that evidence.
+
+    So ``EXEC`` means *attempted* unless the record says otherwise, and the core
+    says so here rather than leaving every consumer to guess. A producer that
+    emits syscall entries without outcomes produces attempts, which is correct
+    and useful; a producer that wants to claim a process actually started has to
+    record the result that proves it.
+    """
+    if event.type is not EventType.EXEC:
+        raise ValueError(f"{event.type.value} is not an exec event")
+    if event.result is None:
+        return ExecOutcome.ATTEMPTED
+    if str(event.result).lower() in _SUCCESS_RESULTS:
+        return ExecOutcome.SUCCEEDED
+    return ExecOutcome.ATTEMPTED
+
+
+@dataclass(frozen=True)
+class MachineEvent:
+    """One observed machine event, or one explicit gap in coverage."""
+
+    type: EventType
+    producer: str
+    producer_version: str
+    platform: str
+    monotonic_time: float
+    wall_time: float
+    privacy_mode: PrivacyMode = PrivacyMode.METADATA_ONLY
+    coverage_state: CoverageState = CoverageState.COVERED
+    identity_confidence: IdentityConfidence = IdentityConfidence.CERTAIN
+    identity: ProcessIdentity | None = None
+    capabilities_at_capture: tuple[CapabilityReport, ...] = ()
+    target: str | None = None
+    result: str | None = None
+    platform_details: Mapping[str, Any] = field(default_factory=dict)
+    target_state: TargetState = TargetState.UNKNOWN
+    coverage_note: CoverageNote | None = None
+    schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise SchemaMismatch(
+                f"event schema version {self.schema_version} "
+                f"is not readable by this build ({SCHEMA_VERSION})"
+            )
+        if event_kind(self.type) is EventKind.ACTION and self.identity is None:
+            raise ValueError(
+                f"{self.type.value} is an action event and requires a process identity"
+            )
+        if not target_is_consistent(self.target, self.target_state):
+            raise ValueError(
+                f"target_state {self.target_state.value} contradicts the recorded "
+                f"target: PRESENT requires a target, and ABSENT, REDACTED and "
+                f"UNKNOWN all require none"
+            )
+
+    def content_violations(self) -> tuple[str, ...]:
+        """Detail keys that carry content rather than shape."""
+        if self.privacy_mode is PrivacyMode.CONTENT_BEARING:
+            return ()
+        return tuple(
+            sorted(
+                key
+                for key in self.platform_details
+                if key.lower() in FORBIDDEN_CONTENT_KEYS
+            )
+        )
+
+    def validate_for_storage(self) -> None:
+        """Guard the boundary, not the constructor.
+
+        Construction happens *before* redaction, so a producer must be able to
+        build an event that still carries a command line and then have the
+        pipeline strip it. Enforcing the metadata-only guarantee at
+        construction would make the redaction stage unreachable — which is the
+        bug this method exists to avoid. The guarantee belongs at the point of
+        writing.
+        """
+        violations = self.content_violations()
+        if violations:
+            raise ValueError(
+                "metadata-only event carries content-bearing detail keys: "
+                + ", ".join(violations)
+            )
+
+    @property
+    def kind(self) -> EventKind:
+        return event_kind(self.type)
+
+    @property
+    def event_id(self) -> str:
+        """Content-derived id: identical content yields an identical id."""
+        canonical = json.dumps(
+            self._payload(include_event_id=False),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _payload(self, *, include_event_id: bool) -> dict:
+        payload = {
+            "schema_version": self.schema_version,
+            "kind": self.kind.value,
+            "type": self.type.value,
+            "producer": self.producer,
+            "producer_version": self.producer_version,
+            "platform": self.platform,
+            "privacy_mode": self.privacy_mode.value,
+            "coverage_state": self.coverage_state.value,
+            "identity_confidence": self.identity_confidence.value,
+            "identity": self.identity.to_dict() if self.identity else None,
+            "capabilities_at_capture": [r.to_dict() for r in self.capabilities_at_capture],
+            "monotonic_time": self.monotonic_time,
+            "wall_time": self.wall_time,
+            "target": self.target,
+            "target_state": self.target_state.value,
+            "coverage_note": (
+                self.coverage_note.to_dict() if self.coverage_note else None
+            ),
+            "result": self.result,
+            "platform_details": dict(self.platform_details),
+        }
+        if include_event_id:
+            payload["event_id"] = self.event_id
+        return payload
+
+    def to_dict(self) -> dict:
+        return self._payload(include_event_id=True)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "MachineEvent":
+        version = payload.get("schema_version")
+        if version != SCHEMA_VERSION:
+            raise SchemaMismatch(
+                f"record schema version {version!r} is not readable by this "
+                f"build ({SCHEMA_VERSION})"
+            )
+        return cls(
+            type=EventType(payload["type"]),
+            producer=payload["producer"],
+            producer_version=payload["producer_version"],
+            platform=payload["platform"],
+            monotonic_time=payload["monotonic_time"],
+            wall_time=payload["wall_time"],
+            privacy_mode=PrivacyMode(payload.get("privacy_mode", "metadata_only")),
+            coverage_state=CoverageState(payload.get("coverage_state", "covered")),
+            identity_confidence=IdentityConfidence(
+                payload.get("identity_confidence", "certain")
+            ),
+            identity=(
+                ProcessIdentity.from_dict(payload["identity"])
+                if payload.get("identity")
+                else None
+            ),
+            capabilities_at_capture=tuple(
+                CapabilityReport.from_dict(item)
+                for item in payload.get("capabilities_at_capture", [])
+            ),
+            target=payload.get("target"),
+            target_state=TargetState(payload.get("target_state", "unknown")),
+            coverage_note=CoverageNote.from_dict(payload.get("coverage_note")),
+            result=payload.get("result"),
+            platform_details=payload.get("platform_details") or {},
+        )
+
+    @classmethod
+    def from_json(cls, line: str) -> "MachineEvent":
+        return cls.from_dict(json.loads(line))
