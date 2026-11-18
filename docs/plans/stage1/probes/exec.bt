@@ -1,0 +1,54 @@
+/*
+ * exec.bt — exec attempts and their outcomes, metadata only.
+ *
+ * Stage 1 probe, machine plane. Reviewed before attach.
+ *
+ * Why attempts and outcomes separately: one command can produce a dozen
+ * execve calls as the shell walks $PATH, and the Stage 0 probe measured exactly
+ * that — 16 entries, 15 failures, for a single `/usr/bin/env echo hi`. An
+ * attempt is therefore recorded as an attempt, and the outcome comes from the
+ * return value. This mirrors exec_outcome() in the core.
+ *
+ * What is NOT captured, deliberately:
+ *   - argv, envp, or any pointer argument from sys_enter_execve
+ *   - the filename pointer from sys_enter_execve
+ *   - any user memory
+ *
+ * The path of the process that actually started is recorded via
+ * sched_process_exec, which fires on a successful image transition. That is a
+ * pathname, not content, and it is the one pointer read in this probe set — it
+ * is listed for review in the run sheet.
+ *
+ * comm is recorded as a label only. It truncates at 15 characters, so it is
+ * never treated as identity.
+ */
+
+BEGIN
+{
+    printf("MARK probe=exec phase=start ts=%llu\n", nsecs);
+}
+
+tracepoint:syscalls:sys_enter_execve
+{
+    @enter[pid, tid] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_execve
+/@enter[pid, tid]/
+{
+    printf("EV exec_attempt pid=%d tid=%d rc=%d cgroup=%llu ts=%llu label=%s\n",
+           pid, tid, args->ret, cgroup, nsecs, comm);
+    delete(@enter[pid, tid]);
+}
+
+tracepoint:sched:sched_process_exec
+{
+    printf("EV exec_started pid=%d tid=%d cgroup=%llu ts=%llu path=%s\n",
+           pid, tid, cgroup, nsecs, str(args->filename));
+}
+
+END
+{
+    printf("MARK probe=exec phase=end ts=%llu\n", nsecs);
+    clear(@enter);
+}
