@@ -24,6 +24,7 @@ from .containment import (
     read_consent,
     write_consent,
 )
+from .privacy_gate import run_gate
 from .recorder import Recorder, RecorderConfig, RunResult, recover_torn_tails
 from .retention import RetentionJournal
 from .supervisor import SystemdSupervisor, current_boot_id, require_root
@@ -64,6 +65,25 @@ def _detect_or_error(agent_account: str | None = None):
         return None, str(error)
 
 
+
+def _producer_module() -> Path:
+    import machine_plane
+
+    return Path(machine_plane.__file__).parent / "producers" / "linux_ebpf.py"
+
+
+def _gate(config: RecorderConfig) -> int:
+    """Gate 1, before anything is installed or attached.
+
+    Run before consent is written and before a probe exists: a dereference that
+    nobody approved is not repaired by a later scan of what it produced.
+    """
+    result = run_gate(list(config.probes), producer_module=_producer_module())
+    print(result.report())
+    return 0 if result.passed else 1
+
+
+
 def _build_config(args) -> RecorderConfig:
     probes = tuple(sorted(DEFAULT_PROBES.glob("*.bt"))) if not args.probe else tuple(
         Path(item) for item in args.probe
@@ -83,6 +103,10 @@ def _build_config(args) -> RecorderConfig:
 
 
 def _install(args) -> int:
+    if args.gate:
+        if _gate(_build_config(args)) != 0:
+            print("\nrefusing to install: Gate 1 failed", file=sys.stderr)
+            return 1
     detection, error = _detect_or_error(args.agent_account)
     config = _build_config(args)
     consent = None
@@ -237,6 +261,9 @@ def _status(args) -> int:
 
 def _record(args) -> int:
     require_root("recorder")
+    if _gate(_build_config(args)) != 0:
+        print("\nrefusing to attach: Gate 1 failed", file=sys.stderr)
+        return 1
     config = _build_config(args)
     if not config.probes:
         print(f"no probes found under {DEFAULT_PROBES}", file=sys.stderr)
@@ -305,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
         "--agent-account",
         default=None,
         help="the account the agent runs as; required when running as root",
+    )
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        default=True,
+        help="run Gate 1 (static privacy inspection); on by default",
     )
     parser.add_argument("--accept-advisory", action="store_true")
     parser.add_argument("--quiet", action="store_true")
