@@ -355,6 +355,9 @@ def read_consent(path: str | os.PathLike[str]) -> Consent | None:
         return None
     try:
         return Consent.from_dict(json.loads(target.read_text(encoding="utf-8")))
+    except PermissionError:
+        # Distinct from corruption: the file may be perfectly readable by root.
+        raise
     except (OSError, ValueError, KeyError) as error:
         raise ValueError(f"unreadable consent file {target}: {error}") from error
 

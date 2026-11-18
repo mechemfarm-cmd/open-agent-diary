@@ -209,18 +209,21 @@ def _status(args) -> int:
         for reason in detection.reasons:
             print(f"  - {reason}")
 
+    consent_note: str | None = None
     try:
         consent = read_consent(args.consent_file)
     except PermissionError:
         # Expected for an unprivileged caller: the consent file is 0600 root.
-        # Saying "unreadable" makes a permission boundary look like a fault.
-        print("consent   : present, not readable by this account (run as root)")
+        # Calling that "unreadable" makes a permission boundary look like a fault.
         consent = None
+        consent_note = "present, not readable by this account (run as root)"
     except ValueError as read_error:
-        print(f"consent   : unreadable ({read_error})")
         consent = None
+        consent_note = f"unreadable ({read_error})"
 
-    if consent is None:
+    if consent_note is not None:
+        print(f"consent   : {consent_note}")
+    elif consent is None:
         print("consent   : none on file")
     elif detection is not None and consent.fingerprint == detection.fingerprint():
         print(f"consent   : current ({consent.consent_kind.value}, {consent.level.value})")
