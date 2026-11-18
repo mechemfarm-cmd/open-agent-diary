@@ -68,18 +68,28 @@ scripts, and no template that Gate 1 would have to reason about.
 
 ## 2. Attach and preflight
 
-Ordered, each step failing closed:
+Ordered, each step failing closed. **There are two attach operations and they are
+not the same thing** — the document names them separately so it cannot be read as
+attaching the production probes twice for no reason.
 
 1. **Create the scope**, measure its cgroup inode, confirm it is a positive integer
-   and that `/sys/fs/cgroup` + the reported control group resolves to it.
-2. **Verify the predicate compiles** for the measured value before any workload
-   exists: attach the probe set with the real argument and require a start marker.
-3. **Confirm the argument was received**: a probe run without a positional argument
-   must fail to attach. Tested as a precondition, not assumed — a probe that
-   silently defaulted to "no filter" is the failure this stage exists to prevent.
-4. **Attach the real probe set**, one process per probe script, require exactly
-   three markers.
-5. **Release the workload** only after steps 1–4 pass.
+   and that the control group reported by systemd resolves to the same inode.
+
+2. **Disposable preflight attach.** One short-lived probe process, attached only to
+   prove two things: the predicate compiles for the measured value, and the argument
+   arrives. It is torn down before the run and produces no evidence.
+
+3. **Confirm the argument is required.** A probe run with no positional argument
+   must fail to attach, and the test asserts that failure rather than assuming it. A
+   probe that silently defaulted to "no filter" is precisely the failure this stage
+   exists to prevent.
+
+4. **Final attach.** The real probe set, one process per probe script, three
+   processes, which stay attached for the window. Each child's argv is captured and
+   asserted to carry the same measured integer — the runtime half of the guarantee,
+   where Gate 1 is the static half.
+
+5. **Release the workload** only after steps 1–4 pass, including the argv assertion.
 
 ## 3. Release-gate ordering
 
@@ -104,6 +114,13 @@ with probes listening but unfiltered.
 | a probe attaches without receiving the argument | **refuse** — this is the silent-widening case |
 | out-of-scope events appear in the capture | run continues, recorded as a defect, report marked void |
 | filter verification times out | refuse; run voided |
+| a probe exits after its start marker but before release | **do not release**; void the run |
+| a probe exits during the window | record, close the window, void the run |
+
+**Teardown order** is stop probes, close the measurement window, then stop the
+scope. Reversing it would let the workload keep running while nothing is listening,
+and any action it took in that gap would be silently absent from a capture that
+looks complete.
 
 **No fallback to host-wide capture.** If filtering cannot be established, the run
 does not happen. A capture that quietly widens is worse than no capture, because it
@@ -111,31 +128,75 @@ looks like the narrow one.
 
 ## 5. Event accounting
 
-Four counters, separately named, replacing today's matched/unmatched pair:
+Two populations, because one cannot serve both purposes. Lifecycle and gap records
+are the recorder's own bookkeeping and carry no workload identity **by design**, so
+counting them as unattributable and then requiring zero would make a correctly
+functioning run impossible. The earlier draft of this section did exactly that:
+each counter was locally sensible and the acceptance criterion contradicted the
+definition.
+
+**Total population**
+
+```
+records = lifecycle + action + gaps
+```
+
+- `lifecycle` — recorder_started, recorder_stopped, attachment markers and the other
+  gap-class events. No process identity, deliberately.
+- `action` — events a probe observed: exec, open, connect.
+- `gaps` — records that could not be read, or were reported as coverage gaps.
+
+**Attribution population — action records only**
+
+```
+action_records = in_scope_actions + out_of_scope_actions + unmatched_actions
+```
 
 | Counter | Definition |
 |---|---|
-| `in_scope` | identity present and its isolation scope equals the named scope |
-| `out_of_scope` | identity present, scope differs — **must be 0 when the filter works** |
-| `unmatched` | no identity, or no isolation domain — cannot be attributed either way |
-| `total` | all records read, including lifecycle |
+| `in_scope_actions` | identity present and its isolation scope equals the named scope |
+| `out_of_scope_actions` | identity present, scope differs |
+| `unmatched_actions` | an action record with no identity or no isolation domain |
 
-`in_scope + out_of_scope + unmatched == total`, checked at import and in the
-recorder's terminal record.
+**Acceptance applies to action records only:**
 
-**Two consequences, both of which are the point.**
+```
+out_of_scope_actions == 0
+unmatched_actions    == 0
+```
 
-- `out_of_scope > 0` is a **defect**, not noise. With the filter attached and
-  verified it should be impossible, so any non-zero value means the filter did not
-  do what it claimed. The importer reports it and the run is marked void.
-- **"No scope supplied" is reported as `unattributed`, never as zero matches.** A
-  capture imported without a scope name has an unknown attribution, not a measured
-  absence of matching events. Those are different claims and were previously
-  conflated by printing `matched 0`.
+`out_of_scope_actions > 0` is a defect and voids the run — once the filter is
+claimed to be narrow, an out-of-scope action is evidence the claim failed.
 
-A **control run** — the same workload, same window, filter disabled and clearly
-labelled as such — is required once, so the narrowing is measured rather than
-asserted: it establishes the host-wide volume that filtering is claimed to remove.
+`unmatched_actions > 0` is also a finding: an action carrying no identity cannot
+have come through a filter keyed on a scope, so its presence means something
+reached the capture by a path not understood.
+
+**Lifecycle and gap records are exempt, and that exemption is stated.** They are
+counted, reported, and never required to be zero or to be attributable.
+
+**What "unattributed" means.** When no scope is supplied at import, attribution is
+unknown. The importer reports `unattributed` and never `in_scope_actions 0` — a
+measured zero and an unknown are different claims, and printing the first for the
+second is a lie about evidence.
+
+**Reported separately**, in the recorder's terminal record and the import summary:
+
+```
+records, lifecycle, action, gaps,
+in_scope_actions, out_of_scope_actions, unmatched_actions,
+scope_supplied (true | false)
+```
+
+**One rule, three places.** The kernel predicate, the producer's re-check and the
+importer's accounting must express the same scope test. It is defined once as a
+named function — `is_in_scope(identity, scope)` — and all three call it, so they
+cannot drift into three subtly different rules that disagree only at the edges.
+
+**Test requirement.** A fixture containing start and stop lifecycle records *and* at
+least one gap must satisfy the acceptance conditions. That is what stops the
+criteria from ever again demanding zero from records that structurally cannot have
+an identity, and it is the test the previous draft would have failed.
 
 ## 6. Privacy and Gate 1 implications
 
@@ -150,6 +211,12 @@ The predicate is inside the verifier's grammar, so Gate 1 must understand it.
 Gate 1 accepts that form and rejects every other filter — including `/cgroup != $1/`,
 a filter referencing any other variable, a filter on a content-bearing field, and a
 filter with no predicate where the approved grammar now requires one.
+
+**Both halves are required, and neither substitutes for the other.** Gate 1 proves
+the source contains exactly the approved predicate. Runtime verification proves the
+invocation carried the measured value and that all three processes reached their
+start markers. Static checking cannot see a command line; a start marker cannot see
+the source. The argv assertion in §2 step 4 is where the runtime half is tested.
 
 **Why the verifier must require it, not merely allow it.** A probe with the
 predicate omitted still attaches and still passes today's Gate 1. That is the same
@@ -170,25 +237,41 @@ reported number.
 
 Supervisor mode only, one named workload, one window, as Stage 3.
 
-**The workload** must produce a known, countable action set — a fixed number of
-execs, opens and one connect attempt — so the expected record count is predictable
-within a range, and a capture that is wildly outside it is visible without
-interpretation. The Stage 3 workload is close to this already; it needs a stated
-expected count rather than a script.
+**The workload declares its expected action manifest before the run**, not after
+it. A fixed number of execs, opens and one connect attempt, written down as the
+expected action count and the expected range. The control run is **not** the source
+of that expectation — it is full of host-wide noise, so deriving an expectation from
+it would mean asserting the capture matches the noise.
+
+The manifest is what makes a filtered capture checkable at a glance: 1,200 actions
+against a declared 1,180–1,240 is either right or visibly wrong. Without it, any
+count looks plausible.
 
 **The window:** 60 seconds, filter enabled, scope named, one run.
 
 **Acceptance for the window:**
 
-1. filter compiled and verified before release; three probes attached;
-2. `out_of_scope == 0` and `unmatched == 0`;
-3. `in_scope` within the stated expected range for the workload;
-4. Gate 2 passes on the sealed segment;
-5. the control run's host-wide total, recorded separately for comparison;
-6. the importer reports the four counters and reconciles them;
-7. after the run: no `bpftrace`, no scope, nothing enabled.
+1. predicate compiled in preflight; argument confirmed required; three probes
+   attached and every child's argv carries the same measured inode;
+2. `out_of_scope_actions == 0`;
+3. `unmatched_actions == 0`;
+4. `in_scope_actions` inside the declared manifest range;
+5. the accounting equation balances: `records == lifecycle + action + gaps`, and
+   `action == in_scope_actions + out_of_scope_actions + unmatched_actions`;
+6. Gate 2 passes on the sealed segment;
+7. the control run's host-wide total is recorded separately and labelled, for
+   comparison only;
+8. after the run: no `bpftrace`, no scope, nothing enabled.
 
-A failure at 1 voids the run before it starts. A failure at 2 voids it after.
+A failure at 1 voids the run before it starts. A failure at 2–5 voids it after, and
+the void record preserves the offending count, the first and last occurrence, the
+cgroup values seen, and the capture identity — so the failure is diagnosable without
+anyone importing the run as valid evidence.
+
+**The control run** is the same workload for the same duration with the filter
+disabled. It is labelled as a control, and it is kept out of the workload-evidence
+store. One control run is sufficient for this stage: it measures the narrowing
+mechanism on this host, and it is a baseline rather than a permanent adequacy proof.
 
 ## 8. Non-goals
 
@@ -202,18 +285,28 @@ A failure at 1 voids the run before it starts. A failure at 2 voids it after.
 
 ## 9. Open questions, and what this does not claim
 
-**Questions for review:**
+**Decisions taken during review of the first draft:**
 
-1. Is requiring the predicate on every `EV` block the right enforcement, or should
-   the recorder refuse to attach a probe whose filter cannot be verified at
-   runtime — or both?
-2. Should `out_of_scope > 0` void the run outright, or record a defect and let the
-   operator decide? I lean towards voiding: a filter that partially works is not a
-   filter, and the numbers downstream cannot be trusted.
-3. Is one control run sufficient to establish the narrowing, or should every
-   filtered run be paired with one?
-4. The expected-count range for the workload: derive it from a control run, or
-   declare it up front and treat a mismatch as a finding?
+1. **Static and runtime enforcement are both required.** Gate 1 proves the source
+   contains the approved predicate; runtime verification proves the invocation
+   carried the measured value and that three processes reached their markers.
+   Neither substitutes for the other.
+2. **Any out-of-scope action voids the run.** Not annotated, not averaged over.
+   The void record keeps the count, first and last occurrence, cgroup values and
+   capture identity.
+3. **The producer re-check stays.** It is the independent seam check, and it shares
+   one `is_in_scope` definition with the predicate and the importer so the three
+   cannot drift.
+4. **One unfiltered control run** for this stage; not one per filtered run.
+5. **The expected action count is declared before the run**, never derived from the
+   control run.
+6. **Lifecycle and gap records are exempt from attribution** and reported
+   separately (§5). The first draft required them to be unattributed *and* zero,
+   which no correct run could satisfy.
+
+**Still open, and worth a view at implementation time:** whether a probe that exits
+during the window should void the run or merely truncate it, and how the manifest
+range should be widened when the workload changes.
 
 **What this does not claim:**
 
