@@ -91,18 +91,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", default=None, help="scope whose events count as attributable")
     parser.add_argument("--recorder", default="machine-plane-recorder")
     parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="import segments with no recorded capture mode into the legacy store; "
+        "they are not workload evidence and never enter the evidence store",
+    )
+    parser.add_argument(
         "--control",
         action="store_true",
         help="import control-run segments into the control store; never the "
         "workload-evidence store",
     )
     args = parser.parse_args(argv)
+    if args.control and args.legacy:
+        parser.error("--control and --legacy are different stores; pick one")
     if args.store is None:
-        args.store = (
-            "/var/lib/machine-plane/store/control/events.ndjson"
-            if args.control
-            else "/var/lib/machine-plane/store/events.ndjson"
-        )
+        if args.control:
+            args.store = "/var/lib/machine-plane/store/control/events.ndjson"
+        elif args.legacy:
+            args.store = "/var/lib/machine-plane/store/legacy/events.ndjson"
+        else:
+            args.store = "/var/lib/machine-plane/store/events.ndjson"
     if args.control and args.recorder:
         pass  # control runs still use the same recorder id; the mode separates them
 
@@ -173,6 +182,26 @@ def main(argv: list[str] | None = None) -> int:
         # that segment; it is not a reason to leave every later segment unimported.
         # Returning here meant a stale control artifact in the spool silently
         # starved every capture that sorted after it.
+        # A segment with no recorded mode is not filtered evidence. It predates the
+        # mode field, so nobody said what it was; relabelling it would turn a
+        # host-wide capture into an apparent workload measurement.
+        if counts.capture_mode == "unknown" and not args.legacy:
+            print(
+                f"  REFUSED {segment.name}: no capture mode recorded — this predates "
+                "mode provenance and cannot be read as workload evidence. Import it "
+                "with --legacy into the legacy store if it must be kept.",
+                file=sys.stderr,
+            )
+            mode_skipped.append(segment.name)
+            continue
+        if args.legacy and counts.capture_mode != "unknown":
+            print(
+                f"  REFUSED {segment.name}: has capture_mode="
+                f"{counts.capture_mode}, so it is not legacy",
+                file=sys.stderr,
+            )
+            mode_skipped.append(segment.name)
+            continue
         if args.control and counts.capture_mode != "control":
             print(
                 f"  REFUSED {segment.name}: not a control run "

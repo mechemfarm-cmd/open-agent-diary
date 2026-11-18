@@ -191,3 +191,92 @@ class TestOneBadSegmentDoesNotStarveTheRest(unittest.TestCase):
         self.assertEqual(len(stored), 5, f"expected the filtered segment only: {out}")
         # Non-zero because a segment was skipped, but the work still happened.
         self.assertNotEqual(code, 0)
+
+
+class TestLegacyProvenance(unittest.TestCase):
+    """A segment with no recorded mode is unknown, and unknown is not filtered.
+
+    Before modes existed every capture looked like this. Defaulting the absence to
+    "filtered" would relabel a host-wide capture as a workload measurement, which is
+    a provenance fail-open rather than a missing feature.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="mp-legacy-"))
+        self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
+        self.spool = self.root / "spool"
+        self.spool.mkdir()
+
+    def seal_legacy(self, name: str = "segment-b-000001-old.ndjson") -> Path:
+        path = self.spool / name
+        spool = Spool(path, "machine-plane-recorder")
+        spool.append(
+            _event(
+                EventType.RECORDER_STARTED,
+                0,
+                {  # no capture_mode: this is the whole point
+                    "capture_id": path.stem,
+                    "cgroup_inode": INODE,
+                    "scope": "mp-test.scope",
+                    "protection_level": "advisory",
+                },
+            )
+        )
+        spool.append(_event(EventType.OPEN, 1))
+        spool.append(
+            _event(EventType.RECORDER_STOPPED, 2, {"records": 2, "protection_level": "advisory"})
+        )
+        return path
+
+    def run_import(self, *extra: str, store: str | None = None) -> tuple[int, str, str]:
+        target = store or str(self.root / "out" / "events.ndjson")
+        argv = [
+            "--spool", str(self.spool),
+            "--store", target,
+            "--checkpoint-dir", str(self.root / "cp"),
+            "--refused-dir", str(self.root / "refused"),
+            *extra,
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = importer_cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_mode_is_unknown_not_filtered(self) -> None:
+        from machine_plane.privacy_scan import account_segment
+
+        path = self.seal_legacy()
+        counts, _, _ = account_segment(path, recorder_id="machine-plane-recorder")
+        self.assertEqual(counts.capture_mode, "unknown")
+
+    def test_normal_import_refuses_it_as_evidence(self) -> None:
+        self.seal_legacy()
+        code, out, err = self.run_import("--probes", str(PROBES))
+        self.assertNotEqual(code, 0)
+        self.assertIn("no capture mode recorded", err)
+        self.assertNotIn("Gate 1 failed", err)
+
+    def test_control_import_also_refuses_it(self) -> None:
+        self.seal_legacy()
+        code, out, err = self.run_import(
+            "--control", "--probes", str(CONTROL_PROBES),
+            store=str(self.root / "out" / "control.ndjson"),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("no capture mode recorded", err)
+
+    def test_legacy_import_takes_it_to_the_legacy_store(self) -> None:
+        self.seal_legacy()
+        target = self.root / "out" / "legacy.ndjson"
+        code, out, err = self.run_import("--legacy", "--probes", str(PROBES), store=str(target))
+        self.assertEqual(code, 0, f"{out}\n{err}")
+        self.assertTrue(target.exists())
+
+    def test_legacy_refuses_a_segment_that_has_a_mode(self) -> None:
+        seal(self.spool / "segment-b-000002-filt.ndjson", "filtered")
+        code, out, err = self.run_import(
+            "--legacy", "--probes", str(PROBES),
+            store=str(self.root / "out" / "legacy.ndjson"),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("not legacy", err)

@@ -132,9 +132,12 @@ class Counts:
     #: separate fact from the above: a segment can carry a scope the caller never
     #: named, and reporting those as "unattributed" contradicts the per-segment counts.
     scope_requested: bool = False
-    #: ``filtered`` or ``control``, read from the run's own header. A control
-    #: segment must never be counted as workload evidence.
-    capture_mode: str = "filtered"
+    #: ``filtered``, ``control``, or ``unknown``. ``unknown`` is what a segment gets
+    #: when its header carries no mode at all — a capture from before modes existed.
+    #: It is NOT filtered: absence of provenance is not evidence of a filter, and
+    #: defaulting it to "filtered" would relabel a host-wide capture as a workload
+    #: measurement.
+    capture_mode: str = "unknown"
     #: Records that could not be parsed at all. Counted as gaps, listed separately
     #: so a corrupt segment is visible as its own number.
     unreadable: int = 0

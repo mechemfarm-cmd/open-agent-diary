@@ -50,6 +50,21 @@ class TestImportRefusesUnsafeSegments(unittest.TestCase):
     def segment(self, name: str, events) -> Path:
         path = self.spool / name
         spool = Spool(path, "machine-plane-recorder", mode=0o600)
+        # Every real segment opens with a header, and since mode provenance landed
+        # a segment without one is legacy and refused. These fixtures model ordinary
+        # filtered captures, so they carry the header a recorder would write.
+        spool.append(
+            MachineEvent(
+                type=EventType.RECORDER_STARTED,
+                producer="machine-plane-recorder",
+                producer_version="1",
+                platform="linux",
+                monotonic_time=0.0,
+                wall_time=1.0,
+                result="enforced",
+                platform_details={"capture_mode": "filtered"},
+            )
+        )
         for event in events:
             spool.append(event)
         return path
@@ -88,7 +103,8 @@ class TestImportRefusesUnsafeSegments(unittest.TestCase):
         code = self.run_import()
 
         self.assertEqual(code, 0)
-        self.assertEqual(len(self.store.read_text().splitlines()), 2)
+        # the two open events plus the RECORDER_STARTED header
+        self.assertEqual(len(self.store.read_text().splitlines()), 3)
 
 
 class TestAccounting(unittest.TestCase):
@@ -110,6 +126,10 @@ class TestAccounting(unittest.TestCase):
                 monotonic_time=0.0,
                 wall_time=1.0,
                 result="enforced",
+                # Explicit: a header with no mode is a legacy capture, and the
+                # importer now refuses those as evidence. This fixture is meant to
+                # be an ordinary filtered segment.
+                platform_details={"capture_mode": "filtered"},
             )
         )
         spool.append(open_event("passwd"))

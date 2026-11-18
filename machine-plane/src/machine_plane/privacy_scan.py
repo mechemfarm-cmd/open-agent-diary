@@ -281,7 +281,7 @@ def account_segment(
     counts = Counts(
         scope_in_segment=scope_inode,
         scope_requested=expected_scope is not None,
-        capture_mode=header_mode or "filtered",
+        capture_mode=header_mode or "unknown",
     )
     counts.gaps += unreadable
     counts.unreadable += unreadable
