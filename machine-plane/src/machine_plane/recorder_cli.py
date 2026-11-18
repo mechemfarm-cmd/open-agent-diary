@@ -211,6 +211,11 @@ def _status(args) -> int:
 
     try:
         consent = read_consent(args.consent_file)
+    except PermissionError:
+        # Expected for an unprivileged caller: the consent file is 0600 root.
+        # Saying "unreadable" makes a permission boundary look like a fault.
+        print("consent   : present, not readable by this account (run as root)")
+        consent = None
     except ValueError as read_error:
         print(f"consent   : unreadable ({read_error})")
         consent = None
