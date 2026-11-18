@@ -46,6 +46,8 @@ fi
 status=0
 for f in $files; do
   [[ -f "$f" ]] || continue
+  # The guard necessarily names what it forbids; scanning itself is a false positive.
+  [[ "$f" == "scripts/check-public-tree.sh" ]] && continue
   for allowed in "${ALLOW[@]}"; do
     [[ "$f" == *"$allowed" ]] && continue 2
   done
