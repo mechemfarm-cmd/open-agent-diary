@@ -1,6 +1,8 @@
 # Machine plane — Stage 3 proposal: the privileged recorder, deployed
 
-**Status:** proposal for review. Nothing here has been built or run.
+**Status:** IMPLEMENTED and run once on the reference host, 2026-11-18. See §16
+for what was built, what the live run showed, and where the deployment is
+narrower than this document assumes.
 **Revision:** 3 — revised after review of `3d2e1f7`. Retention is recorded in a
 single authoritative journal rather than in a segment marker, which also fixes the
 one-sealed-segment case (§8.1), and that journal is now bounded and compacted
@@ -789,3 +791,47 @@ Open, and deliberately not decided by this proposal:
 - It does not claim a runtime scan compensates for an unsafe probe. Gate 1 exists
   because it does not: a segment scan cannot unrun a dereference.
 - It does not claim the view exists. It does not.
+
+## 16. As deployed, and how it differs from this document
+
+Written after implementation, because a design that still reads as a plan after
+the code ships misleads the next reader.
+
+**Built.** The recorder (one bounded supervisor-mode capture), the containment
+gate with fingerprint-bound consent, bounded retention with an authoritative
+journal, the importer for sealed segments, Gate 1 (static, pre-attach) and Gate 2
+(runtime, post-window). Unit files as a template oneshot with no `[Install]`.
+
+**Run once** on the reference host: 45-second window, 199,221 records in one
+segment, sealed, `workload_exit`. Ingestion: 199,225 emitted, 199,225 stored, 0
+duplicates. Ownership checks 19–22 attempted rather than assumed — nine checks,
+all pass. Later captures of 20 seconds produced ~80,000 records each, which is the
+write-volume argument in §13 made concrete.
+
+**Seven defects were found by running it**, five of them in code this document
+describes as designed:
+
+1. probe collection blocked forever — a live bpftrace never exits on its own;
+2. a deliberate stop was reported as a probe failure;
+3. the window collapsed to the workload's lifetime;
+4. root detected itself as the agent;
+5. the recorder skipped the pipeline's redaction stage, storing absolute paths;
+6. `EXEC` was missing from `PATH_EVENT_TYPES`, so the one approved pathname was
+   also the one stored in full;
+7. the importer's record key collided across segments, silently merging three
+   distinct events.
+
+Items 5 and 6 were found by Gate 2 on its first live run, which is the argument
+for Gate 2 existing at all.
+
+**Where the deployment is narrower than this document.** The probes remain
+host-wide and unfiltered, exactly as Stage 1 built them. The recorder path —
+scope, join key, attach, normalise, redact, seal, ingest — is proven end to end,
+but the records are not attributable to the workload that ran. §11.1 checks 13–15
+read as though they were. Filtering the probes is a change to reviewed probe
+sources and needs its own review.
+
+**Checks exercised only in the suite, not on hardware:** 17, 18, 23–29 (retention
+and rotation behaviours). One rotation did occur live — three segments were dropped
+under the byte cap during a later capture — but the failure branches were not
+exercised on the host.
