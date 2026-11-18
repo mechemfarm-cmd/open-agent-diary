@@ -65,9 +65,14 @@ class SpoolEnvelope:
 class Spool:
     """An append-only, recorder-owned spool of machine events."""
 
-    def __init__(self, path: str | os.PathLike[str], recorder: str) -> None:
+    def __init__(
+        self, path: str | os.PathLike[str], recorder: str, mode: int = 0o600
+    ) -> None:
         self.path = Path(path)
         self.recorder = recorder
+        # Segments are group-readable so the unprivileged importer can read them;
+        # the default stays 0600 for every other use of a spool.
+        self.mode = mode
 
     def append(self, event: MachineEvent) -> None:
         """Append one record.
@@ -90,7 +95,7 @@ class Spool:
         line = (envelope.to_json() + "\n").encode("utf-8")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(
-            self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+            self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, self.mode
         )
         try:
             os.write(descriptor, line)
