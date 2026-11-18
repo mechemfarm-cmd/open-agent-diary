@@ -1,10 +1,13 @@
 # Machine plane — Stage 3 proposal: the privileged recorder, deployed
 
 **Status:** proposal for review. Nothing here has been built or run.
-**Revision:** 2 — revised after review of `77892f6`. Two blockers fixed
-(bounded/manual service in §3, consent bound to a privilege fingerprint in §2.5)
-and four clarifications added (ownership matrix §6, startup consent matrix §7.1,
-rotation failure semantics §8, pre-attach privacy gate §11.0).
+**Revision:** 3 — revised after review of `3d2e1f7`. Retention is recorded in a
+single authoritative journal rather than in a segment marker, which also fixes the
+one-sealed-segment case (§8.1), and that journal is now bounded and compacted
+(§8.2). Revision 2's changes, from the review of `77892f6`: bounded/manual service
+(§3), consent bound to a privilege fingerprint (§2.5), ownership matrix (§6),
+startup consent matrix (§7.1), rotation failure semantics (§8), pre-attach privacy
+gate (§11.0).
 **Predecessors:** Stage 1 closed (final result approved); Stage 2 approved at
 `495e48d` / `b64fd7e` for the producer and the demonstrated ingestion boundary.
 **Target host:** the reference host.
@@ -449,31 +452,78 @@ writing into the same filesystem — not the mechanism, because a quota fails at
 write time rather than prompting a rotation, and a rotation triggered by `ENOSPC`
 has already lost the record that hit it.
 
-**Order of operations, and why this order.** Only sealed segments are candidates;
-the active `.partial` is never deleted, because deleting the file being appended to
-loses the run in progress. Oldest sealed segment goes first:
+**Who records a retention event: the journal, always.**
+
+Revision 2 wrote the `retention_dropped` marker into the newest segment. Review
+found the case where there is exactly one sealed segment — newest and oldest are the
+same file, so the marker is written into it and then deleted with it. But the defect
+is general, not an edge case: **any marker stored in a segment is destroyed by the
+mechanism it describes.** With several segments, each marker survives only until its
+own segment ages out, so the record of retention erodes at exactly the rate that
+retention happens. Over a long life the journal of drops becomes a history of the
+most recent few.
+
+So retention is recorded in `spool/retention.journal`, and **that file is the
+authoritative record of every retention event**. Segments carry no retention
+markers. The importer reads the journal alongside sealed segments, and the store's
+`retention_dropped` events come from it.
+
+It also removes a decision rather than adding one: there is no "is the victim also
+the newest?" branch, no distinct-surviving-segment requirement, and no rule about
+which of two places wins. Requiring a second segment would deadlock the case the
+cap exists for — when the allocation is smaller than one segment, dropping the only
+segment is the only way to stay under it.
+
+**Order of operations.** Only sealed segments are candidates; the active `.partial`
+is never deleted, because deleting the file being appended to loses the run in
+progress. Oldest sealed segment first:
 
 1. choose the oldest sealed segment; compute what will be freed;
-2. append a `retention_dropped` record to the **newest** segment — count, oldest
-   dropped timestamp, bytes freed, total dropped to date;
-3. `fsync` that segment;
-4. `unlink` the chosen segment;
+2. append a retention record to `retention.journal` — time, victim name, the
+   victim's oldest record timestamp, bytes freed, running total;
+3. `fsync` the journal;
+4. `unlink` the victim;
 5. `fsync` the spool directory.
 
-The marker is written **before** the deletion, so a crash between 3 and 5 leaves a
-record of a drop that did not happen — harmless and correctable — rather than a
-deleted segment nobody recorded. On startup, a `retention_dropped` marker whose
-segment still exists is amended with `retention_aborted`. The other ordering fails
-unrecoverably, which is why it is not the one used.
+The record is written **before** the deletion, for the same reason as before: a
+crash between 3 and 5 leaves a claim of a drop that has not yet happened, which the
+next start can reconcile, rather than a deletion nobody recorded. On start, every
+retention record's victim is checked; if a victim still exists (crash between 3 and
+4), a `retention_aborted` note is appended and the deletion is retried.
 
-**If the newest segment cannot take the marker.** Explicit fallback chain:
+**If the journal cannot be written**, the run stops with `retention_unrecordable`
+and a non-zero exit. There is no second fallback, because the journal *is* the
+record; a fallback would only relocate the same failure.
 
-1. newest sealed segment;
-2. `spool/retention.journal` — append-only, never rotated, root-owned, kept for
-   exactly this case;
-3. nothing writable at all → **stop the run** with `retention_unrecordable`,
-   exit non-zero. Voided, not degraded: a spool that can neither be written nor
-   pruned means the numbers cannot be trusted.
+### 8.2 The journal is bounded, because an unbounded journal is a second spool
+
+The journal grows for as long as retention happens. "Never rotated" would make it
+an unbounded second spool sitting beside the first, which defeats the cap.
+
+Bound it with `machine-plane-retention-journal-max-bytes` (default 1 MiB). This is
+metadata, not evidence, so it is excluded from the segment allocation and reported
+separately in `status`.
+
+When the journal exceeds the cap, **compact** it:
+
+1. compute a summary from the current journal — events compacted, segments dropped,
+   bytes freed, first and last dropped timestamps, cumulative count;
+2. write `retention.journal.new` containing that summary record and nothing else;
+3. `fsync`, `rename` over `retention.journal`, `fsync` the directory.
+
+The summary is O(1), so compaction never leaves the journal larger than one summary
+plus whatever has accumulated since.
+
+**Compaction loses per-event detail, and says so.** The summary carries
+`compactions` and `detail_from`. The view reports *"retention detail before ⟨ts⟩
+has been compacted"* rather than quietly showing fewer events than occurred. A
+compaction that made the record look cleaner than reality would be the same class
+of error as a silent gap.
+
+The `rename` is the commit point. A leftover `.new` is discarded on start and the
+summary recomputed — safe, because the summary is derived from the journal and
+recomputation is idempotent. If compaction fails for lack of space, the run stops
+with `retention_unrecordable`.
 
 **Distinguishing retention loss from recorder loss.** Every loss record carries
 `loss_kind`, and the view reports them separately:
@@ -517,6 +567,9 @@ truncation is recorded as a gap.
 | Recorder killed | torn tail on restart, sealed as a gap |
 | Spool full | gap + loss count, run continues |
 | Disk full | gap, run continues until the run ends |
+| Retention journal unwritable | run stops, `retention_unrecordable`, non-zero exit |
+| Journal compaction fails | run stops, `retention_unrecordable` |
+| Crash between journal write and unlink | next start reconciles, appends `retention_aborted`, retries |
 | Clock step | `clock_jump` record |
 | Agent tries to write the spool | permission denied; nothing else needed |
 | Scope inode mismatch | fail closed, both values named |
@@ -531,7 +584,11 @@ Without reading internals, and without root:
   end, and why;
 - the newest segment's terminal record — records written, loss count, end reason;
 - whether any segment is unsealed (a torn tail);
-- how much of the allocation is in use, and whether rotation has dropped anything.
+- how much of the segment allocation is in use;
+- **retention state**: how many segments have been dropped, how large the journal
+  is against its own cap, when it was last compacted, and the `detail_from` horizon
+  — so a shortened retention history is visible rather than looking like it never
+  happened.
 
 This matters because §17 asks whether privilege separation can be made
 comprehensible to a non-technical operator. Stage 3's answer is a small, honest
@@ -626,23 +683,37 @@ Both gates are required. Gate 2 does not substitute for Gate 1.
 22. The importer never reads a `.partial`: while a run is live, ingestion finds no
     new sealed segment.
 
-**Retention (clarification 5)**
+**Retention (clarification 5, and the follow-up blocker)**
 
-23. Rotation: force the allocation below segment size; the oldest **sealed**
-    segment is dropped and `retention_dropped` records the right count. The active
-    `.partial` is never chosen.
-24. Marker fallback: make the newest segment unwritable; the marker lands in
-    `retention.journal` instead.
-25. Marker unrecordable: make both unwritable; the run stops with
-    `retention_unrecordable` and a non-zero exit.
-26. `loss_kind` values are distinct in the view — retention, recorder, probe and
+23. Rotation across several segments: force the allocation below total size; the
+    oldest sealed segment is dropped and the journal records it with the right
+    count and byte total. The active `.partial` is never chosen.
+24. **Exactly one sealed segment over the cap** — the case found in review, where
+    the victim is also the newest. After rotation: the segment is gone, the journal
+    holds the retention record, and that record survives. Restart and recovery: the
+    journal is intact, no spurious `retention_aborted` is written, and the importer
+    reports one retention event rather than zero.
+25. **Retention history outlives its segments.** Rotate repeatedly until every
+    segment that ever carried a run has been dropped; every drop is still accounted
+    for in the journal. This is the property revision 2 could not have passed, and
+    it is what makes the fix general rather than an edge-case patch.
+26. Journal compaction: write past
+    `machine-plane-retention-journal-max-bytes`; the journal compacts to one summary
+    record, cumulative totals are unchanged, `detail_from` is set, and the view
+    reports the horizon instead of silently showing fewer events than occurred.
+27. Compaction crash: leave a `retention.journal.new` behind; start discards it,
+    recomputes the summary, and the totals are identical — recomputation is
+    idempotent.
+28. Journal unwritable: the run stops with `retention_unrecordable` and a non-zero
+    exit, and no segment is deleted.
+29. `loss_kind` values are distinct in the view — retention, recorder, probe and
     torn tail are not summed into one number.
 
 **Privacy (clarification 6)**
 
-27. Gate 1 passes on the shipped probes and fails on a probe with an injected
+30. Gate 1 passes on the shipped probes and fails on a probe with an injected
     `args->filename` dereference — proven both ways, before any attach.
-28. Gate 2 finds no field outside the schema in a real sealed segment.
+31. Gate 2 finds no field outside the schema in a real sealed segment.
 
 Check 19 must run as an account that has no sudo, because the agent's own account
 has sudo and would pass for the wrong reason. Checks 8–11 are the pair that prove
