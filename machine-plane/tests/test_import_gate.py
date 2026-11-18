@@ -126,41 +126,35 @@ class TestAccounting(unittest.TestCase):
             )
         )
 
-        counts, events = account_segment(path, recorder_id="machine-plane-recorder")
+        counts, events, _already = account_segment(
+            path, recorder_id="machine-plane-recorder"
+        )
 
         self.assertEqual(counts.records, 4)
         self.assertEqual(counts.lifecycle, 2)
         self.assertEqual(counts.action, 2)
         self.assertEqual(counts.gaps, 0)
-        self.assertTrue(counts.consistent, counts.line())
+        self.assertTrue(counts.totals_balance)
         self.assertEqual(len(events), 4)
 
 
 class TestAttribution(unittest.TestCase):
-    def test_events_are_split_by_scope(self) -> None:
+    def test_the_join_key_is_the_inode_not_the_scope_name(self) -> None:
+        from machine_plane.accounting import is_in_scope
         from machine_plane.identity import DomainType, IsolationDomain, ProcessIdentity
 
-        def with_scope(scope: str | None) -> MachineEvent:
-            event = open_event("passwd")
-            identity = ProcessIdentity(
+        def identity(domain_id: str, scope: str | None) -> ProcessIdentity:
+            return ProcessIdentity(
                 host_id="h",
                 boot_id="b",
                 process_instance_id="p",
                 isolation_domain=IsolationDomain(
-                    type=DomainType.CGROUP, id="1", scope=scope
+                    type=DomainType.CGROUP, id=domain_id, scope=scope
                 ),
             )
-            return MachineEvent(**{**event.__dict__, "identity": identity})
 
-        matched, unmatched = attribution(
-            [with_scope("mp-scope"), with_scope("other-scope"), with_scope(None)],
-            scope="mp-scope",
-        )
-        self.assertEqual((matched, unmatched), (1, 2))
-
-    def test_no_scope_means_nothing_is_attributable(self) -> None:
-        matched, unmatched = attribution([open_event("passwd")], scope=None)
-        self.assertEqual((matched, unmatched), (0, 1))
+        self.assertTrue(is_in_scope(identity("385715", "mp-x.scope"), "385715"))
+        self.assertFalse(is_in_scope(identity("330814", "mp-x.scope"), "385715"))
 
 
 if __name__ == "__main__":

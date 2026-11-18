@@ -20,7 +20,8 @@ from pathlib import Path
 
 from .importer import Importer
 from .privacy_gate import run_gate
-from .privacy_scan import account_segment, attribution, gate2
+from .accounting import Counts
+from .privacy_scan import account_segment, gate2
 from .spool import Spool, SpoolError
 
 DEFAULT_PROBES = Path("/usr/lib/machine-plane/probes")
@@ -112,14 +113,20 @@ def main(argv: list[str] | None = None) -> int:
         print("no sealed segments to import")
         return 0
 
-    totals = {"records": 0, "lifecycle": 0, "action": 0, "gaps": 0,
-              "imported": 0, "duplicates": 0, "refused": 0, "already": 0}
-    matched = unmatched = 0
+    totals = Counts(scope_supplied=args.scope is not None)
+    imported_total = duplicates_total = refused_records = already_total = 0
     refused: list[str] = []
 
+    def accumulate(total: Counts, part: Counts) -> None:
+        total.lifecycle += part.lifecycle
+        total.action += part.action
+        total.gaps += part.gaps
+        total.unreadable += part.unreadable
+        total.in_scope_actions += part.in_scope_actions
+        total.out_of_scope_actions += part.out_of_scope_actions
+        total.unmatched_actions += part.unmatched_actions
+
     for segment in segments:
-        # The scan is a precondition, not a report.
-        scan = gate2(segment, recorder_id=args.recorder, probe_fields=gate1.fields)
         checkpoint = checkpoints / f"{segment.name}.offset"
         offset = 0
         if checkpoint.exists():
@@ -127,16 +134,26 @@ def main(argv: list[str] | None = None) -> int:
                 offset = int(json.loads(checkpoint.read_text()).get("offset", 0))
             except ValueError:
                 offset = 0
-        counts, events = account_segment(
-            segment, recorder_id=args.recorder, checkpoint_offset=offset
-        )
 
+        try:
+            counts, _events, already = account_segment(
+                segment,
+                recorder_id=args.recorder,
+                checkpoint_offset=offset,
+                expected_scope=args.scope,
+            )
+        except ValueError as error:
+            print(f"  FAILED {segment.name}: {error}", file=sys.stderr)
+            return 1
+
+        # The scan is a precondition, not a report.
+        scan = gate2(segment, recorder_id=args.recorder, probe_fields=gate1.fields)
         if not scan.passed:
             path = _refuse(Path(args.refused_dir), segment, scan)
             refused.append(segment.name)
-            for key in ("records", "lifecycle", "action", "gaps", "already"):
-                totals[key] += getattr(counts, key)
-            totals["refused"] += counts.records
+            refused_records += counts.records
+            already_total += already
+            accumulate(totals, counts)
             print(f"  REFUSED {segment.name} — see {path}")
             for finding in scan.findings[:5]:
                 print(f"    {finding}")
@@ -147,52 +164,46 @@ def main(argv: list[str] | None = None) -> int:
                 Spool(segment, args.recorder),
                 recorder_id=args.recorder,
                 store=store,
-                checkpoint_path=checkpoints / f"{segment.name}.offset",
+                checkpoint_path=checkpoint,
             ).run()
         except (SpoolError, ValueError) as error:
             print(f"  FAILED {segment.name}: {error}", file=sys.stderr)
             return 1
 
-        counts.imported = result.imported
-        counts.duplicates = result.duplicates
-        if not counts.consistent:
-            print(f"  ACCOUNTING MISMATCH {counts.line()}", file=sys.stderr)
+        if not (counts.totals_balance and counts.actions_balance):
+            print(f"  ACCOUNTING MISMATCH {segment.name}", file=sys.stderr)
+            for line in counts.report_lines():
+                print(f"    {line}", file=sys.stderr)
             return 1
 
-        segment_matched, segment_unmatched = attribution(events, scope=args.scope)
-        matched += segment_matched
-        unmatched += segment_unmatched
-
-        for key in ("records", "lifecycle", "action", "gaps", "imported",
-                    "duplicates", "already"):
-            totals[key] += getattr(counts, key)
-        print(f"  {counts.line()}")
+        imported_total += result.imported
+        duplicates_total += result.duplicates
+        already_total += already
+        accumulate(totals, counts)
+        for line in counts.report_lines():
+            print(f"  {line}")
 
     print()
-    balanced = totals["lifecycle"] + totals["action"] + totals["gaps"] == totals["records"]
-    ingested = (totals["imported"] + totals["duplicates"]
-                + totals["refused"] + totals["already"])
-    reconciled = ingested == totals["records"]
+    for line in totals.report_lines():
+        print(line)
 
-    print(f"records    : {totals['records']} = lifecycle {totals['lifecycle']}"
-          f" + action {totals['action']} + gaps {totals['gaps']}"
-          f"  [{'balances' if balanced else 'DOES NOT BALANCE'}]")
-    print(f"ingested   : {totals['imported']} imported + {totals['duplicates']} duplicates"
-          f" + {totals['refused']} refused + {totals['already']} already = {ingested}"
-          f"  [{'reconciles' if reconciled else 'DOES NOT RECONCILE'}]")
-    print(f"store      : {store.path}")
-    print(f"attribution: matched {matched} / unmatched {unmatched}"
-          f" (scope {args.scope or 'not supplied'})")
+    ingested = imported_total + duplicates_total + refused_records + already_total
+    print(
+        f"ingested  : {imported_total} imported + {duplicates_total} duplicates"
+        f" + {refused_records} refused + {already_total} already = {ingested}"
+        f"  [{'reconciles' if ingested == totals.records else 'DOES NOT RECONCILE'}]"
+    )
+    print(f"store     : {store.path}")
+
     if args.scope is None:
-        print("  NOTE: no scope supplied — these records are host-wide and must not be")
-        print("        read as evidence of what the workload did.")
+        print("  NOTE: no scope supplied — these records are unattributed and must not")
+        print("        be read as evidence of what the workload did.")
 
     if refused:
         print(f"\nrefused segments: {len(refused)} — not imported as evidence",
               file=sys.stderr)
         return 1
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
