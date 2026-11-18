@@ -2,9 +2,9 @@
 
 Replay mode is what makes these runnable without root and without bpftrace, which
 is why the producer has an explicit captured-log mode rather than only a live one.
-The capture below is taken from the real Stage 1 run on Emily, including its
-awkward cases: a failed exec, a non-blocking connect, and a line carrying a field
-that must never reach storage.
+The capture below is taken from the real Stage 1 run on the reference host,
+including its awkward cases: a failed exec, a non-blocking connect, and a line
+carrying a field that must never reach storage.
 """
 
 from __future__ import annotations

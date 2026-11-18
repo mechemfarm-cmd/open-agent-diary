@@ -31,11 +31,11 @@ def advisory_detection(
     *,
     account: str = "agent-account",
     uid: int = 1000,
-    grants: tuple[str, ...] = ("/etc/sudoers.d/grant-a",),
+    grants: tuple[str, ...] = ("/etc/sudoers.d/<grant-a>",),
     groups: tuple[str, ...] = ("agent-account",),
     is_root: bool = False,
     can_control_units: bool = False,
-    reasons: tuple[str, ...] = ("passwordless sudo grant: /etc/sudoers.d/grant-a",),
+    reasons: tuple[str, ...] = ("passwordless sudo grant: /etc/sudoers.d/<grant-a>",),
 ) -> Detection:
     return Detection(
         account=account,
@@ -91,11 +91,11 @@ class TestDetection(unittest.TestCase):
             uid=1000,
             host_id="host",
             sudo_lister=lambda _: "    (ALL : ALL) NOPASSWD: ALL\n",
-            sudoers_lister=lambda _: ("/etc/sudoers.d/grant-a",),
+            sudoers_lister=lambda _: ("/etc/sudoers.d/<grant-a>",),
             group_lister=lambda _: ("agent-account",),
         )
         self.assertIs(detection.level, Level.ADVISORY)
-        self.assertIn("/etc/sudoers.d/grant-a", detection.grants)
+        self.assertIn("/etc/sudoers.d/<grant-a>", detection.grants)
 
     def test_passwordless_we_cannot_name_is_still_advisory(self) -> None:
         """An unnamed grant must not read as 'no escalation'."""
@@ -163,10 +163,10 @@ class TestFingerprint(unittest.TestCase):
     def test_a_new_grant_changes_the_fingerprint(self) -> None:
         before = advisory_detection()
         after = advisory_detection(
-            grants=("/etc/sudoers.d/grant-a", "/etc/sudoers.d/grant-b"),
+            grants=("/etc/sudoers.d/<grant-a>", "/etc/sudoers.d/<grant-b>"),
             reasons=(
-                "passwordless sudo grant: /etc/sudoers.d/grant-a",
-                "passwordless sudo grant: /etc/sudoers.d/grant-b",
+                "passwordless sudo grant: /etc/sudoers.d/<grant-a>",
+                "passwordless sudo grant: /etc/sudoers.d/<grant-b>",
             ),
         )
         self.assertNotEqual(before.fingerprint(), after.fingerprint())
@@ -208,7 +208,7 @@ class TestStartupMatrix(unittest.TestCase):
     def test_a_changed_fingerprint_refuses_and_names_the_field(self) -> None:
         old = advisory_detection()
         new = advisory_detection(
-            grants=("/etc/sudoers.d/grant-a", "/etc/sudoers.d/grant-b")
+            grants=("/etc/sudoers.d/<grant-a>", "/etc/sudoers.d/<grant-b>")
         )
         decision = decide_startup(
             detection=new,
