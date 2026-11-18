@@ -115,12 +115,19 @@ class Importer:
             # do not advance the checkpoint past it.
             event = MachineEvent.from_dict(envelope.event)
 
-            # Identity is the record's position in the spool, not its content.
-            # Two genuinely distinct events can redact to identical content —
-            # two different paths both dropped by policy — and deduplicating on
-            # content would silently merge them into one. A wrong merge is the
-            # same class of error as a wrong match.
-            record_key = f"{envelope.recorder}:{start_offset}"
+            # Identity is the record's position *within its segment*, not its
+            # content. Two genuinely distinct events can redact to identical
+            # content — two different paths both dropped by policy — and
+            # deduplicating on content would silently merge them into one.
+            #
+            # The segment name is part of the key, not decoration: every segment
+            # restarts its offsets at 0, so a key of recorder+offset makes the
+            # first record of one segment collide with the first record of every
+            # other. That dropped three genuine events on the first real import.
+            # A wrong merge is the same class of error as a wrong match.
+            record_key = (
+                f"{envelope.recorder}:{self.spool.path.name}:{start_offset}"
+            )
 
             if self.store.has(record_key):
                 result.duplicates += 1
