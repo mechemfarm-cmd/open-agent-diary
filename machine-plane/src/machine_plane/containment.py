@@ -185,14 +185,13 @@ def _grants(
     except (OSError, RuntimeError) as error:
         raise DetectionError(f"cannot read sudo rules for {account}: {error}") from error
 
-    files: tuple[str, ...] = ()
-    if sudoers_lister is not None:
-        try:
-            files = tuple(sorted(set(sudoers_lister(account))))
-        except (OSError, RuntimeError) as error:
-            raise DetectionError(
-                f"cannot read sudoers drop-ins for {account}: {error}"
-            ) from error
+    namer = sudoers_lister or _real_sudoers_files
+    try:
+        files = tuple(sorted(set(namer(account))))
+    except (OSError, RuntimeError) as error:
+        raise DetectionError(
+            f"cannot read sudoers drop-ins for {account}: {error}"
+        ) from error
 
     passwordless = "nopasswd" in listing.lower()
     if not passwordless:

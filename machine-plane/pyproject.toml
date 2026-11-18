@@ -15,6 +15,7 @@ dependencies = []
 
 [project.scripts]
 machine-plane = "machine_plane.cli:main"
+machine-plane-recorder = "machine_plane.recorder_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

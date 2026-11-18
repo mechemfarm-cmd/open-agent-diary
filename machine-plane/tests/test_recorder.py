@@ -41,8 +41,9 @@ class FakeScope:
         self.waited = None
         self.stopped = False
 
-    def wait(self, timeout: float) -> None:
+    def wait(self, timeout: float) -> int:
         self.waited = timeout
+        return 0
 
     def stop(self) -> None:
         self.stopped = True

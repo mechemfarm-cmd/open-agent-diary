@@ -50,7 +50,7 @@ class Scope(Protocol):
     @property
     def cgroup_inode(self) -> str: ...
 
-    def wait(self, timeout: float) -> None: ...
+    def wait(self, timeout: float) -> int: ...
 
     def stop(self) -> None: ...
 
@@ -162,7 +162,8 @@ class Recorder:
         config: RecorderConfig,
         *,
         supervisor: Supervisor,
-        producer: Producer,
+        producer: Producer | None = None,
+        producer_factory=None,
         boot_id: str = "",
         sequence: int = 0,
         clock=time.monotonic,
@@ -174,6 +175,10 @@ class Recorder:
         self.config = config
         self.supervisor = supervisor
         self.producer = producer
+        # The producer needs the scope's cgroup inode to fill scope_by_cgroup, and
+        # that does not exist until the scope is created — so it is built after
+        # the start, not before.
+        self.producer_factory = producer_factory
         self.boot_id = boot_id
         self.sequence = sequence
         self.clock = clock
@@ -239,8 +244,9 @@ class Recorder:
                 )
             )
 
-            for raw in self.producer.collect():
-                writer.append(self.producer.normalize(raw))
+            producer = self._producer_for(scope)
+            for raw in producer.collect():
+                writer.append(producer.normalize(raw))
 
             scope.wait(self.config.duration_s)
 
@@ -311,6 +317,13 @@ class Recorder:
         )
 
     # -- helpers ---------------------------------------------------------
+
+    def _producer_for(self, scope: Scope) -> Producer:
+        if self.producer_factory is not None:
+            return self.producer_factory(scope)
+        if self.producer is None:
+            raise ValueError("a producer or producer_factory is required")
+        return self.producer
 
     def _rotate(self, journal: RetentionJournal, spool_dir: Path) -> tuple[str, ...]:
         paths = sorted(spool_dir.glob("segment-*.ndjson"))
