@@ -33,9 +33,33 @@ DEFAULT_CONSENT = Path("/etc/machine-plane/containment.json")
 DEFAULT_PROBES = Path("/usr/lib/machine-plane/probes")
 
 
-def _detect_or_error():
+def _detect_or_error(agent_account: str | None = None):
+    """Detect the *agent's* protection level, not the caller's.
+
+    The recorder runs as root, so detecting the current account would always
+    answer "root can do anything" — true, and useless. The question is what the
+    agent can do, which means the account has to be named.
+    """
+    if agent_account is None:
+        if os.geteuid() == 0:
+            return None, (
+                "running as root: pass --agent-account so the protection level "
+                "describes the agent rather than the recorder"
+            )
+        try:
+            return detect(), None
+        except DetectionError as error:
+            return None, str(error)
+
     try:
-        return detect(), None
+        import pwd
+
+        entry = pwd.getpwnam(agent_account)
+    except (ImportError, KeyError):
+        return None, f"no such account: {agent_account}"
+
+    try:
+        return detect(account=entry.pw_name, uid=entry.pw_uid), None
     except DetectionError as error:
         return None, str(error)
 
@@ -59,7 +83,7 @@ def _build_config(args) -> RecorderConfig:
 
 
 def _install(args) -> int:
-    detection, error = _detect_or_error()
+    detection, error = _detect_or_error(args.agent_account)
     config = _build_config(args)
     consent = None
     try:
@@ -148,7 +172,7 @@ def _install(args) -> int:
 
 
 def _status(args) -> int:
-    detection, error = _detect_or_error()
+    detection, error = _detect_or_error(args.agent_account)
     if detection is None:
         print(f"protection: UNKNOWN ({error})")
     else:
@@ -174,17 +198,30 @@ def _status(args) -> int:
         print(f"spool     : {spool} (absent)")
         return 0
 
-    sealed = sorted(spool.glob("segment-*.ndjson"))
-    partial = sorted(spool.glob("segment-*.ndjson.partial"))
-    total = sum(path.stat().st_size for path in sealed)
+    try:
+        sealed = sorted(spool.glob("segment-*.ndjson"))
+        partial = sorted(spool.glob("segment-*.ndjson.partial"))
+        total = sum(path.stat().st_size for path in sealed)
+    except PermissionError:
+        # Expected for an unprivileged caller: the spool is root:mp-read 0750.
+        # Say so rather than reporting an empty spool, which would read as "no
+        # data" — the opposite of what the permission denial means.
+        print(f"spool     : {spool} (not readable by this account)")
+        return 0
+
     print(f"spool     : {spool}")
     print(f"  segments: {len(sealed)} sealed, {total} bytes")
     print(f"  partial : {len(partial)} unsealed" + (" (torn tail)" if partial else ""))
 
     journal_path = spool / "retention.journal"
     journal = RetentionJournal(journal_path, args.journal_max_bytes)
-    totals = journal.totals()
-    print(f"  journal : {journal.size()} bytes, {totals.events} drops, "
+    try:
+        totals = journal.totals()
+        size = journal.size()
+    except PermissionError:
+        print("  journal : not readable by this account")
+        return 0
+    print(f"  journal : {size} bytes, {totals.events} drops, "
           f"{totals.compactions} compactions")
     if totals.detail_from is not None:
         print(
@@ -205,7 +242,7 @@ def _record(args) -> int:
         print(f"no probes found under {DEFAULT_PROBES}", file=sys.stderr)
         return 1
 
-    detection, error = _detect_or_error()
+    detection, error = _detect_or_error(args.agent_account)
     consent = None
     try:
         consent = read_consent(args.consent_file)
@@ -264,6 +301,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration", type=float, default=60.0)
     parser.add_argument("--max-bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--journal-max-bytes", type=int, default=1024 * 1024)
+    parser.add_argument(
+        "--agent-account",
+        default=None,
+        help="the account the agent runs as; required when running as root",
+    )
     parser.add_argument("--accept-advisory", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)

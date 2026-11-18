@@ -18,6 +18,7 @@ therefore written once, plainly.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,10 +246,39 @@ class Recorder:
             )
 
             producer = self._producer_for(scope)
-            for raw in producer.collect():
-                writer.append(producer.normalize(raw))
+            # Collection runs for the length of the window, not until the probes
+            # exit on their own — a live bpftrace does not exit by itself, so
+            # draining it inline would mean the duration was never reached.
+            errors: list[BaseException] = []
 
+            def _collect() -> None:
+                try:
+                    for raw in producer.collect():
+                        writer.append(producer.normalize(raw))
+                except BaseException as collect_error:  # noqa: BLE001
+                    errors.append(collect_error)
+
+            collector = threading.Thread(target=_collect, daemon=True)
+            collector.start()
+            window_started = self.clock()
             scope.wait(self.config.duration_s)
+
+            # The window is the duration, not the workload's lifetime. A workload
+            # that exits early must not shorten the measurement — otherwise the
+            # recorded span varies with how fast the workload happened to run,
+            # and two runs are no longer comparable.
+            remaining = self.config.duration_s - (self.clock() - window_started)
+            if remaining > 0:
+                time.sleep(remaining)
+
+            stop = getattr(producer, "stop", None)
+            if callable(stop):
+                stop()
+            collector.join(timeout=15)
+            if collector.is_alive():
+                raise RuntimeError("probe collection did not stop after the window")
+            if errors:
+                raise errors[0]
 
         except RetentionError as error:
             end_reason = "retention_unrecordable"

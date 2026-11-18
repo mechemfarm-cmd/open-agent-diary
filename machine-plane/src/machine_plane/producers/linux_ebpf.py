@@ -136,6 +136,13 @@ class LinuxEBPFProducer(Producer):
         #: instead of at a wall-clock instant in a different clock.
         self._last_monotonic: float = 0.0
         self._unparsed = 0
+        #: Live bpftrace children, so the recorder can stop collection when
+        #: the window ends rather than waiting for them to exit on their own.
+        self._live_processes: list[subprocess.Popen[str]] = []
+        #: Set when collection is stopped deliberately. A probe that we
+        #: terminated exits non-zero by definition, and reporting that as a
+        #: probe failure would make every successful run look broken.
+        self._stopping = False
         self._capabilities = self._build_capabilities()
 
     # -- capabilities ----------------------------------------------------
@@ -198,6 +205,13 @@ class LinuxEBPFProducer(Producer):
 
     # -- collect ---------------------------------------------------------
 
+    def stop(self) -> None:
+        """Terminate any live probes. Collection then ends normally."""
+        self._stopping = True
+        for process in self._live_processes:
+            if process.poll() is None:
+                process.terminate()
+
     def require_live_prerequisites(self) -> None:
         """Check that this process can actually attach the probes.
 
@@ -253,6 +267,7 @@ class LinuxEBPFProducer(Producer):
                     text=True,
                 )
                 processes.append(process)
+                self._live_processes.append(process)
                 # Drain stderr continuously. Leaving it unread until the process
                 # exits deadlocks a chatty probe: the pipe buffer fills (~64 KiB)
                 # and bpftrace blocks writing to it while we block reading stdout.
@@ -271,7 +286,7 @@ class LinuxEBPFProducer(Producer):
             failures = []
             for path, process in zip(self._probe_paths, processes):
                 process.wait()
-                if process.returncode:
+                if process.returncode and not self._stopping:
                     failures.append(f"{path}: {_collected_stderr(process, drains)}")
             for _, thread, _ in drains:
                 thread.join(timeout=2)
