@@ -21,6 +21,7 @@ anything outside that shape rather than guessing:
     }
 
     specifier := BEGIN | END | tracepoint:<group>:<name> | kprobe:<symbol> ...
+    filter    := [ <existing terms> && ] cgroup == $1     (REQUIRED on EV blocks)
     format    := "MARK probe=<name> phase=<phase> ts=%llu"
                | "EV <event> name=<value> ..."     (name=value pairs, %d/%s/%llu)
     arg       := identifier | args-><field> | args->ret | nsecs | comm | cgroup
@@ -107,19 +108,53 @@ _OPENER = re.compile(
 )
 
 
-def _enclosing_specifier(source: str, position: int) -> str:
-    """The block a ``printf`` sits in, by scanning back for the nearest opener.
+def _enclosing_block(source: str, position: int) -> tuple[str, str]:
+    """The specifier and filter of the block containing ``position``.
 
-    Block bodies cannot be delimited by matching braces reliably — ``BEGIN { ... }``
-    is legal on one line, and a naive ``^}`` terminator then swallows every block
-    after it. Attribution decides whether a dereference is approved, so it cannot
-    be approximately right: a merged block could attribute an unapproved read to
-    the one approved tracepoint.
+    bpftrace allows the specifier, the filter and the opening brace to be spread
+    across three lines, which is how this probe set is written. Parsing the header
+    as a single line therefore found no filter at all — and a verifier that cannot
+    see a filter will happily report every probe as unfiltered, or worse, a
+    filtered probe as unfiltered in one build and filtered in the next.
+
+    Walking back from the opening brace is unambiguous: the brace ends the block
+    header, and the one or two non-empty lines above it are the filter and the
+    specifier.
     """
-    last = "<top-level>"
-    for opener in _OPENER.finditer(source, 0, position):
-        last = opener.group("spec").strip()
-    return last
+    lines = source[:position].splitlines()
+    index = len(lines) - 1
+    while index >= 0 and not lines[index].strip().endswith("{"):
+        index -= 1
+    if index < 0:
+        return "<top-level>", ""
+
+    header = lines[index].strip()[:-1].strip()
+    filter_text = ""
+
+    # `specifier /filter/ {`
+    if "/" in header:
+        spec, _, rest = header.partition("/")
+        filter_text = "/" + rest
+        return spec.strip() or "<unknown>", filter_text
+
+    if header:
+        return header, ""
+
+    # `specifier` then `/filter/` then `{`, each on its own line.
+    cursor = index - 1
+    while cursor >= 0 and not lines[cursor].strip():
+        cursor -= 1
+    if cursor >= 0 and lines[cursor].strip().startswith("/"):
+        filter_text = lines[cursor].strip()
+        cursor -= 1
+    while cursor >= 0 and not lines[cursor].strip():
+        cursor -= 1
+    spec = lines[cursor].strip() if cursor >= 0 else "<unknown>"
+    return spec or "<unknown>", filter_text
+
+
+def _enclosing_specifier(source: str, position: int) -> str:
+    return _enclosing_block(source, position)[0]
 
 
 @dataclass
@@ -220,6 +255,28 @@ def inspect_probe(path: str | Path) -> ProbeInspection:
             continue
 
         text = literal.group("text")
+        if text.startswith("EV "):
+            _, filter_text = _enclosing_block(source, call.start())
+            if re.search(r"cgroup\s*!=", filter_text):
+                inspection.findings.append(
+                    Finding(
+                        target.name,
+                        "widening-predicate",
+                        f"block {specifier!r} compares cgroup with '!=', which "
+                        "widens rather than narrows",
+                    )
+                )
+            elif "cgroup == $1" not in filter_text:
+                inspection.findings.append(
+                    Finding(
+                        target.name,
+                        "missing-scope-predicate",
+                        f"block {specifier!r} prints an event but its filter is "
+                        f"{filter_text or '(none)'!r} — every EV block requires "
+                        "'cgroup == $1'",
+                    )
+                )
+
         names = re.findall(r"(\w+)=", text)
         if not names:
             inspection.findings.append(

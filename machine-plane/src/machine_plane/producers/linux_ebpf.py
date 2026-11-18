@@ -223,6 +223,30 @@ class LinuxEBPFProducer(Producer):
         """Probe names as the scripts announce them in their start marker."""
         return {Path(path).stem for path in self._probe_paths}
 
+    def scope_argument(self) -> str:
+        """The measured cgroup inode, as the probes' positional argument.
+
+        The probes' predicate is ``/cgroup == $1/``. Passing this is what makes
+        the capture narrow; omitting it does **not** fail — bpftrace evaluates an
+        absent ``$1`` as 0, every EV block matches nothing, and the run produces a
+        successful-looking empty capture. That is why the argument is derived
+        here, required here, and asserted on each child's argv below.
+        """
+        if len(self._scope_by_cgroup) != 1:
+            raise ValueError(
+                "live capture needs exactly one cgroup->scope entry to derive the "
+                f"probe argument; got {len(self._scope_by_cgroup)}"
+            )
+        inode = next(iter(self._scope_by_cgroup))
+        try:
+            int(inode)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"cgroup inode {inode!r} is not an integer, so it cannot match the "
+                "kernel predicate's numeric comparison"
+            ) from error
+        return str(inode)
+
     def require_live_prerequisites(self) -> None:
         """Check that this process can actually attach the probes.
 
@@ -252,6 +276,8 @@ class LinuxEBPFProducer(Producer):
                 "inode, but correlation matches runs on isolation_domain.scope. "
                 "Without the map every event is unmatchable."
             )
+        # Fail before attaching rather than after producing an empty capture.
+        self.scope_argument()
 
     def collect(self) -> Iterable[RawEvent]:
         """Yield parsed events from a captured log, or from live probes."""
@@ -264,6 +290,7 @@ class LinuxEBPFProducer(Producer):
             raise ValueError("probe_paths are required unless captured_log_path is set")
 
         self.require_live_prerequisites()
+        scope_argument = self.scope_argument()
 
         # One process per probe script. A single invocation given several scripts
         # runs only the first and silently ignores the rest.
@@ -272,11 +299,18 @@ class LinuxEBPFProducer(Producer):
         try:
             for path in self._probe_paths:
                 process = subprocess.Popen(
-                    [self._bpftrace, path],
+                    [self._bpftrace, path, scope_argument],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                # The runtime half of the guarantee: the source carries the
+                # predicate (Gate 1) and the invocation carries the value (here).
+                # Neither implies the other.
+                if process.args[-1] != scope_argument:
+                    raise RuntimeError(
+                        f"{path}: probe was not given the scope argument"
+                    )
                 processes.append(process)
                 self._live_processes.append(process)
                 # Drain stderr continuously. Leaving it unread until the process
