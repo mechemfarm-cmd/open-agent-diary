@@ -81,7 +81,7 @@ RESTART_CUES = (
 )
 
 DOMAIN_TOKENS = {
-    "openclaw", "codex", "gateway", "browser", "mac", "emily", "telegram", "chunking", "memory",
+    "openclaw", "codex", "gateway", "browser", "mac", "telegram", "chunking", "memory",
     "timeline", "agent", "diary", "microcontractor", "remarkable", "play", "console", "supabase",
 }
 

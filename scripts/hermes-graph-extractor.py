@@ -45,9 +45,9 @@ Rules:
 Respond with ONLY a JSON object:
 {
   "no_facts": false,
-  "entities": [{"name": "Lucy", "type": "device"}],
+  "entities": [{"name": "workstation", "type": "device"}],
   "facts": [
-    {"subject": "Pi-hole", "predicate": "RUNS_ON", "object": "Lucy", "confidence": "high", "timestamp": "2026-09-09T12:00:00Z"}
+    {"subject": "backup-service", "predicate": "RUNS_ON", "object": "workstation", "confidence": "high", "timestamp": "2026-09-09T12:00:00Z"}
   ]
 }
 If there are no facts, return {"no_facts": true, "reason": "optional explanation"}.

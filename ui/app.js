@@ -400,10 +400,10 @@ function speakerTone(label) {
   if (!normalized) {
     return SPEAKER_TONES[0];
   }
-  if (["user", "human", "you", "bill", "willard", "willardmechem"].includes(normalized)) {
+  if (["user", "human", "you"].includes(normalized)) {
     return SPEAKER_TONES[0];
   }
-  if (["assistant", "agent", "tom", "codex", "bot"].includes(normalized)) {
+  if (["assistant", "agent", "bot"].includes(normalized)) {
     return SPEAKER_TONES[1];
   }
   let hash = 0;
@@ -1761,7 +1761,7 @@ async function renderGraphLanding() {
   form.className = "graph-search-form";
   const input = document.createElement("input");
   input.type = "text";
-  input.placeholder = "Search entities... (e.g. Lucy, Pi-hole, Art)";
+  input.placeholder = "Search entities... (e.g. workstation, service, project)";
   input.autocomplete = "off";
   const btn = document.createElement("button");
   btn.type = "submit";
