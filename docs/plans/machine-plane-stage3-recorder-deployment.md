@@ -66,7 +66,7 @@ If you would rather keep §16's numbering and fold the deployment into Stage 4 a
 its first half, say so and I will restructure — the content does not depend on
 the label.
 
-## 2. The containment problem on this fleet, stated before anything else
+## 2. Containment: what this protects, whose decision it is
 
 §1.3 of the design says it plainly: *"Agent with sudo. Explicitly outside the
 guarantee."*
@@ -84,43 +84,111 @@ $ grep -rl willard /etc/sudoers.d/
   /etc/sudoers.d/netmap-wifi
 ```
 
-That has a specific, unflattering consequence:
+That has a specific consequence:
 
-> Deploying a root-owned recorder on Emily today produces an **audit-trail
-> integrity** property, not a containment property. It stops an agent that has
-> been prompt-injected into doing something *careless*. It does not stop an agent
-> that decides to become root, because nothing stops that.
+> A root-owned recorder on this account layout produces an **advisory** property,
+> not an **enforced** one. It stops an agent that has been prompt-injected into
+> doing something *careless*. It does not stop an agent that decides to become
+> root, because nothing stops that.
 
-This is not a reason not to build it. It is a reason not to claim more than it
-delivers — and the design's whole posture is that an overclaimed guarantee is
-worse than a smaller honest one.
+Recording still works. What is not guaranteed is that the record is untampered.
 
-**Two options, and this is a decision for Bill, not for me:**
+### 2.1 The product states its own protection level
 
-- **(a) Deploy the recorder now, label the guarantee honestly.** The recorder runs
-  as root. The agent runs as `willard` with sudo. Every acceptance check about
-  "the agent cannot write the spool" is then demonstrated with an unprivileged
-  user that *lacks* sudo, and the document says plainly that this is a model of
-  the agent's behaviour, not a constraint on it. Cheap, immediate, honest.
-- **(b) Move Hermes to a dedicated unprivileged account** (`hermes`, no sudo, no
-  docker group, no systemctl rights) and run the recorder as root. This is the
-  change that makes the guarantee real. It is also a change to the thing Bill
-  uses every day: session files, plugins, the diary service unit, paths, and
-  every script that assumes `$HOME` is `/home/willard`.
+This must not live in a caveat in a design document that the user never reads. It
+is a property of the running system, and the system reports it.
 
-My recommendation is **(a) now, (b) as its own piece of work.** (b) is not a
-deployment detail; it is a fleet-wide account change with a real chance of
-breaking the agent it is meant to constrain, and bundling it into a recording
-deployment is exactly the kind of scope mixing that produced the mess in
-September.
+**Two levels, and only two:**
 
-Stage 3 proceeds on (a) unless Bill says otherwise. If (b) is chosen instead, this
-proposal needs a section added, not a rewrite.
+| Level | Condition | What it means |
+|---|---|---|
+| **enforced** | the agent's account cannot escalate to root | the recorder and spool are a real boundary; an agent that wanted to tamper cannot |
+| **advisory** | the agent's account can escalate to root | recording works, but the protection is a convention; an agent that chose to could alter or delete records |
+
+**Detection**, run at install and at every recorder start. Any one match means
+`advisory`:
+
+- the agent's account has a `NOPASSWD` sudo grant (checked with `sudo -n -l -U`);
+- the agent's account is in `sudo`, `wheel`, `docker`, `disk`, or `lxd`;
+- the agent's account can start or stop system units via polkit;
+- the agent runs as root, or the recorder cannot determine which account owns the
+  agent process (unknown is `advisory`, never `enforced`).
+
+The reasons are reported individually — *which* grant matched — because "your
+agent can become root" without naming the grant is not actionable.
+
+### 2.2 What the user is actually shown
+
+At install, in plain language, before anything is written:
+
+```
+MACHINE PLANE — PROTECTION LEVEL: ADVISORY
+
+The agent runs as account "willard", which can become root without a
+password.
+
+Matching grants:
+  /etc/sudoers.d/tom
+  /etc/sudoers.d/netmap-wifi
+
+The recorder will still record what the agent does. What it cannot
+guarantee is that the record is untampered — an agent that decided to
+become root could alter or delete it.
+
+Recording works. The protection is a convention, not a boundary.
+
+To get the enforced level, run the agent as an account that cannot become
+root. That is a separate change; this installer will not make it for you.
+
+Continue in advisory mode? [y/N]
+```
+
+Three rules about that prompt:
+
+- **It defaults to no.** A silent `y` on a protection question is how people end
+  up believing they have a guarantee they do not have.
+- **Non-interactive installs must pass an explicit flag** (`--accept-advisory`)
+  or they abort. No default-accept path exists, including for automation.
+- **No `--quiet` suppresses it.** The whole point is that the user sees it.
+
+### 2.3 The decision is recorded, and stays visible
+
+Accepting advisory mode writes a record — `/etc/machine-plane/containment.json` —
+carrying the level, the account, the matching grants, the time, and how consent
+was given (interactive or flag). That makes "the user decided this" a fact about
+the installation rather than something we remember saying.
+
+The level is then shown permanently, not once:
+
+- `machine-plane-recorder status` prints it first, before anything else;
+- the view carries a standing line: `Protection: ADVISORY (agent can become root)`;
+- every segment's terminal record carries the level in force for that run, so a
+  record can never be read later as more authoritative than it was when written.
+
+If the account situation changes — the grant is removed, or added — the level is
+re-evaluated on the next start and a change is written to the same file. **A
+downgrade is surfaced, never silent**, for the same reason the loss runner voids
+rather than continues.
+
+### 2.4 Decision
+
+Bill has chosen **(a): deploy now, advisory, with the trade-off stated to the
+user and the decision left to them.** That is what this section specifies, and it
+is why the detection, the prompt, and the standing display are in Stage 3 rather
+than deferred. A user who is told plainly and chooses anyway has made an informed
+decision; a user who is told nothing has been misled, whether or not the code is
+correct.
+
+Option (b) — moving Hermes to a dedicated unprivileged account — remains the way
+to reach `enforced`, and remains a separate piece of work. This stage does not
+perform it and does not pretend to.
 
 ## 3. What the recorder is
 
 A systemd system service, running as root, with one job:
 
+0. determine the protection level (§2.1) and **refuse to start silently in
+   `advisory`** — if the user has not accepted it, the run does not happen;
 1. create a cgroup scope for a named workload;
 2. launch that workload inside the scope;
 3. measure the scope's cgroup inode;
@@ -265,6 +333,8 @@ start  -> measure -> attach -> run -> detach -> seal -> exit 0
 
 Without reading internals, and without root:
 
+- **the protection level first, with the grants that produced it** — `enforced` or
+  `advisory`, stated every time, never implied;
 - `machine-plane-recorder status` — is the service running, when did the last run
   end, and why;
 - the newest segment's terminal record — records written, loss count, end reason;
@@ -300,9 +370,24 @@ written around.
 10. No content beyond the declared metadata fields appears in any record —
     checked by scanning a real segment for fields the schema does not define.
 
+11. Containment detection reports `advisory` for the agent's account on Emily and
+    names every matching grant — not a generic "your agent may escalate".
+12. The install prompt defaults to no: an empty answer aborts, and nothing is
+    written under `/etc/machine-plane/`.
+13. A non-interactive install without `--accept-advisory` aborts. No path,
+    including automation, reaches advisory mode without an explicit yes.
+14. Accepting writes `containment.json` carrying the level, the account, the
+    matching grants, the time, and how consent was given.
+15. `status` prints the level before anything else, and every terminal record
+    carries the level in force for its run.
+16. Detection on the purpose-made unprivileged test account reports `enforced` —
+    proving the detector discriminates, rather than always answering `advisory`.
+
 Check 7 must be run with an account that does not have sudo. On Emily, that means
 a purpose-made account for the test, because `willard` has sudo and would pass the
-check for the wrong reason. This is the concrete consequence of section 2.
+check for the wrong reason. This is the concrete consequence of section 2 — and
+checks 11 and 16 together are the proof that the system knows which case it is in,
+rather than reciting a fixed warning.
 
 ## 12. Non-goals
 
@@ -334,8 +419,11 @@ successful deployment.
 
 1. Is the renumbering in §1 acceptable, or should the deployment fold into
    Stage 4 as its first half?
-2. Is (a) — deploy now with the guarantee labelled audit-integrity-only — the
-   right call, or does the deployment wait for (b)?
+2. Is the advisory/enforced gate the right shape — detection at install *and*
+   every start, a default-no prompt, a recorded consent file, and the level
+   stamped into every terminal record — or is the record more ceremony than the
+   protection warrants? Bill's decision is to deploy in advisory mode and let the
+   user decide; the question is whether this is the honest way to present it.
 3. Supervisor mode only, or is observer mode required before this counts as
    deployed?
 4. Should retention/rotation be in this stage, or is it Stage 4's first piece?
@@ -346,8 +434,10 @@ successful deployment.
 
 ## 15. What this does not claim
 
-- It does not claim the agent is contained. On today's account layout it is not
-  (section 2).
+- It does not claim the agent is contained. On today's account layout it is not,
+  and the system says so to the user's face — at install, at every start, in
+  `status`, and in every run's terminal record (section 2). A user who accepts
+  advisory mode has made an informed choice; nothing here hides it from them.
 - It does not claim the probes are complete. The seven declared gaps from
   Stage 1 and Stage 2 are unchanged.
 - It does not claim always-on is affordable. Only that one bounded run works.
