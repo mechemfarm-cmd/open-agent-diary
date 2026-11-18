@@ -132,6 +132,9 @@ class Counts:
     #: separate fact from the above: a segment can carry a scope the caller never
     #: named, and reporting those as "unattributed" contradicts the per-segment counts.
     scope_requested: bool = False
+    #: ``filtered`` or ``control``, read from the run's own header. A control
+    #: segment must never be counted as workload evidence.
+    capture_mode: str = "filtered"
     #: Records that could not be parsed at all. Counted as gaps, listed separately
     #: so a corrupt segment is visible as its own number.
     unreadable: int = 0

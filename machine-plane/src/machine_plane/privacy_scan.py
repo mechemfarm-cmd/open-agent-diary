@@ -40,6 +40,7 @@ LIFECYCLE_KEYS = frozenset(
         "supervisor_mode",
         "records",
         "dropped_this_run",
+        "capture_mode",
         "producer_out_of_scope",
         "error",
         "sealed_on_recovery",
@@ -62,6 +63,7 @@ NUMERIC_OR_ENUM_KEYS = frozenset(
         "write",
         "records",
         "dropped_this_run",
+        "capture_mode",
         "producer_out_of_scope",
         "protection_level",
         "supervisor_mode",
@@ -266,6 +268,7 @@ def account_segment(
             if raw_inode is not None:
                 scope_inode = str(raw_inode)
             header_scope = details.get("scope")
+            header_mode = details.get("capture_mode")
             break
 
     if expected_scope is not None and header_scope is not None and header_scope != expected_scope:

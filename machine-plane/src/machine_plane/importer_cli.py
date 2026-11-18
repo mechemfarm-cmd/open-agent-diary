@@ -84,13 +84,27 @@ def _refuse(refused_dir: Path, segment: Path, scan) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="machine-plane-import")
     parser.add_argument("--spool", default="/var/lib/machine-plane/spool")
-    parser.add_argument("--store", default="/var/lib/machine-plane/store/events.ndjson")
+    parser.add_argument("--store", default=None)
     parser.add_argument("--checkpoint-dir", default="/var/lib/machine-plane/store/checkpoints")
     parser.add_argument("--refused-dir", default="/var/lib/machine-plane/store/refused")
     parser.add_argument("--probes", default=str(DEFAULT_PROBES))
     parser.add_argument("--scope", default=None, help="scope whose events count as attributable")
     parser.add_argument("--recorder", default="machine-plane-recorder")
+    parser.add_argument(
+        "--control",
+        action="store_true",
+        help="import control-run segments into the control store; never the "
+        "workload-evidence store",
+    )
     args = parser.parse_args(argv)
+    if args.store is None:
+        args.store = (
+            "/var/lib/machine-plane/store/control/events.ndjson"
+            if args.control
+            else "/var/lib/machine-plane/store/events.ndjson"
+        )
+    if args.control and args.recorder:
+        pass  # control runs still use the same recorder id; the mode separates them
 
     spool_dir = Path(args.spool)
     store = FileStore(Path(args.store))
@@ -145,6 +159,24 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as error:
             print(f"  FAILED {segment.name}: {error}", file=sys.stderr)
+            return 1
+
+        # Modes do not mix, in either direction. A control segment counted as
+        # workload evidence overstates what the workload did; a filtered segment in
+        # the control store would make the comparison meaningless.
+        if args.control and counts.capture_mode != "control":
+            print(
+                f"  REFUSED {segment.name}: not a control run "
+                f"(capture_mode={counts.capture_mode})",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.control and counts.capture_mode == "control":
+            print(
+                f"  REFUSED {segment.name}: control artifact in the workload-evidence "
+                "path — import it with --control",
+                file=sys.stderr,
+            )
             return 1
 
         # The scan is a precondition, not a report.

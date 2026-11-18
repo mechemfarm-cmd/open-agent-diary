@@ -206,10 +206,12 @@ def _split_arguments(body: str) -> list[str]:
     return parts
 
 
-def inspect_probe(path: str | Path) -> ProbeInspection:
+def inspect_probe(path: str | Path, mode: str = "filtered") -> ProbeInspection:
     target = Path(path)
     raw = target.read_text(encoding="utf-8")
     source = _strip_comments(raw)
+    if mode not in {"filtered", "control"}:
+        raise ValueError(f"unknown probe mode {mode!r}; expected filtered or control")
     inspection = ProbeInspection(name=target.name)
 
     for label, pattern in UNSUPPORTED_PATTERNS.items():
@@ -257,7 +259,20 @@ def inspect_probe(path: str | Path) -> ProbeInspection:
         text = literal.group("text")
         if text.startswith("EV "):
             _, filter_text = _enclosing_block(source, call.start())
-            if re.search(r"cgroup\s*!=", filter_text):
+            if mode == "control":
+                # A control probe must NOT be narrowed. Carrying the predicate here
+                # would make the control narrower than the filtered run and the
+                # comparison would measure nothing.
+                if "cgroup == $1" in filter_text:
+                    inspection.findings.append(
+                        Finding(
+                            target.name,
+                            "control-is-filtered",
+                            f"block {specifier!r} carries the scope predicate but this "
+                            "is a control probe — the control must be unfiltered",
+                        )
+                    )
+            elif re.search(r"cgroup\s*!=", filter_text):
                 inspection.findings.append(
                     Finding(
                         target.name,
@@ -363,6 +378,7 @@ def run_gate(
     *,
     producer_module: str | Path,
     expected_fields: set[str] | None = None,
+    mode: str = "filtered",
 ) -> GateResult:
     findings: list[Finding] = []
     fields: set[str] = set()
@@ -372,7 +388,7 @@ def run_gate(
         findings.append(Finding("<none>", "no-probes", "the gate has nothing to inspect"))
 
     for probe in probes:
-        inspection = inspect_probe(probe)
+        inspection = inspect_probe(probe, mode=mode)
         findings.extend(inspection.findings)
         fields |= inspection.fields
         dereferences |= inspection.dereferences

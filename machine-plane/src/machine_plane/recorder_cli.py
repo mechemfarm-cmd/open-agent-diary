@@ -33,6 +33,10 @@ from .supervisor import SystemdSupervisor, current_boot_id, require_root
 DEFAULT_SPOOL = Path("/var/lib/machine-plane/spool")
 DEFAULT_CONSENT = Path("/etc/machine-plane/containment.json")
 DEFAULT_PROBES = Path("/usr/lib/machine-plane/probes")
+#: The paired unfiltered set. A separate directory, not a flag on the same files:
+#: a control that can be produced by turning the filter off at runtime is one
+#: typo away from being evidence.
+DEFAULT_CONTROL_PROBES = Path("/usr/lib/machine-plane/probes/control")
 
 
 def _detect_or_error(agent_account: str | None = None):
@@ -79,7 +83,11 @@ def _gate(config: RecorderConfig):
     Run before consent is written and before a probe exists: a dereference that
     nobody approved is not repaired by a later scan of what it produced.
     """
-    result = run_gate(list(config.probes), producer_module=_producer_module())
+    result = run_gate(
+        list(config.probes),
+        producer_module=_producer_module(),
+        mode=config.capture_mode,
+    )
     print(result.report())
     return (0 if result.passed else 1), result.fields
 
@@ -90,9 +98,12 @@ def _gate_code(config: RecorderConfig) -> int:
 
 
 def _build_config(args) -> RecorderConfig:
-    probes = tuple(sorted(DEFAULT_PROBES.glob("*.bt"))) if not args.probe else tuple(
+    probe_root = DEFAULT_CONTROL_PROBES if args.control else DEFAULT_PROBES
+    probes = tuple(sorted(probe_root.glob("*.bt"))) if not args.probe else tuple(
         Path(item) for item in args.probe
     )
+    if not probes:
+        raise ValueError(f"no probes found under {probe_root}")
     return RecorderConfig(
         capture_id=args.capture_id,
         spool_dir=Path(args.spool),
@@ -101,6 +112,7 @@ def _build_config(args) -> RecorderConfig:
         duration_s=args.duration,
         max_bytes=args.max_bytes,
         journal_max_bytes=args.journal_max_bytes,
+        capture_mode="control" if args.control else "filtered",
     )
 
 
@@ -361,6 +373,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         default=True,
         help="run Gate 1 (static privacy inspection); on by default",
+    )
+    parser.add_argument(
+        "--control",
+        action="store_true",
+        help="record the paired unfiltered control run; never workload evidence",
     )
     parser.add_argument("--accept-advisory", action="store_true")
     parser.add_argument("--quiet", action="store_true")
