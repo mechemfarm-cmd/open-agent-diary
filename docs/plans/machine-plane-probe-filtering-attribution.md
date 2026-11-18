@@ -141,10 +141,27 @@ definition.
 records = lifecycle + action + gaps
 ```
 
-- `lifecycle` — recorder_started, recorder_stopped, attachment markers and the other
-  gap-class events. No process identity, deliberately.
-- `action` — events a probe observed: exec, open, connect.
-- `gaps` — records that could not be read, or were reported as coverage gaps.
+The three classes are **disjoint and exhaustive**. Every record belongs to exactly
+one, and each class is defined by its event types rather than by description:
+
+- `lifecycle` — **only** `recorder_started`, `recorder_stopped`, and the attachment
+  markers. Recorder bookkeeping, no process identity, deliberately.
+- `action` — `exec`, `open`, `read_attempt`, `write_attempt`, `create`, `rename`,
+  `unlink`, `metadata_change`, `connect`. Events a probe observed.
+- `gaps` — `buffer_overflow`, `permission_gap`, `unsupported_kernel_feature`,
+  `sink_unavailable`, `clock_jump`, and any record that could not be read.
+
+**Every coverage-loss event is a gap, never a lifecycle event.** An earlier draft of
+this section listed "other gap-class events" under `lifecycle` while also defining a
+`gaps` population, which would have counted buffer overflows, permission gaps, sink
+failures and clock jumps in both — inflating `records` and destroying the equation's
+meaning.
+
+This matters because the core schema has a broader notion: `event_kind()` classifies
+all seven of those types as `EventKind.GAP`. The accounting split is a **refinement**
+of that classification, not the same thing, and the importer must apply this
+partition rather than `event_kind()`. That difference is exactly where a drift would
+go unnoticed.
 
 **Attribution population — action records only**
 
@@ -188,15 +205,43 @@ in_scope_actions, out_of_scope_actions, unmatched_actions,
 scope_supplied (true | false)
 ```
 
-**One rule, three places.** The kernel predicate, the producer's re-check and the
-importer's accounting must express the same scope test. It is defined once as a
-named function — `is_in_scope(identity, scope)` — and all three call it, so they
-cannot drift into three subtly different rules that disagree only at the edges.
+**One normative rule, three representations.** The scope test must be the same
+decision everywhere, but it cannot literally be the same code: `bpftrace` cannot
+call a Python function, so "define it once and call it three times" was an
+overclaim in the previous draft.
 
-**Test requirement.** A fixture containing start and stop lifecycle records *and* at
-least one gap must satisfy the acceptance conditions. That is what stops the
-criteria from ever again demanding zero from records that structurally cannot have
-an identity, and it is the test the previous draft would have failed.
+The rule is therefore stated normatively, and each side implements it:
+
+> An event is **in scope** if and only if its cgroup identity is present and its
+> numeric value equals the measured scope cgroup inode.
+
+| Representation | Form |
+|---|---|
+| `bpftrace` (kernel predicate) | `/cgroup == $1/`, `$1` a decimal integer |
+| Python (producer re-check, importer accounting) | `is_in_scope(identity, scope_inode)` |
+
+**The seam is tested, not assumed.** Gate 1 pins the predicate text to exactly
+`/cgroup == $1/`. The Python helper's truth table is asserted over the cases that
+decide agreement: equal, not equal, absent cgroup, absent identity, non-numeric.
+And the two representations are reconciled behaviourally by the paired runs — the
+filtered run's `in_scope_actions` must equal the control run's action records that
+the Python rule classifies as in scope. If the predicate and the helper disagreed,
+the two counts would diverge, which is a far stronger check than either in
+isolation.
+
+**Test requirement.** A fixture containing start and stop lifecycle records, at
+least one **real** gap event (`buffer_overflow` or `clock_jump`, not a generic
+placeholder), and at least one action record must satisfy the acceptance
+conditions *and* must classify each record exactly once.
+
+The disjointness is asserted directly: sum the three classes, compare to the record
+count, and assert no record is claimed twice. A generic gap fixture would not have
+caught the double count, because the double count came from the classification
+rule, not from the data.
+
+This is the test the previous two drafts would have failed — the first demanded zero
+identity from records that cannot have one, and the second placed gap events in two
+classes at once.
 
 ## 6. Privacy and Gate 1 implications
 
@@ -303,6 +348,14 @@ mechanism on this host, and it is a baseline rather than a permanent adequacy pr
 6. **Lifecycle and gap records are exempt from attribution** and reported
    separately (§5). The first draft required them to be unattributed *and* zero,
    which no correct run could satisfy.
+7. **The three accounting classes are disjoint and exhaustive**, defined by event
+   type: lifecycle is recorder start/stop and attachment markers only; every
+   coverage-loss event is a gap. The second draft listed gap-class events under
+   lifecycle as well, which would have counted them twice.
+8. **The scope test is one normative rule with two representations** — a bpftrace
+   predicate and a Python helper — reconciled by a seam test rather than by a
+   shared function name. Saying "defined once and called three times" was wrong:
+   bpftrace cannot call Python.
 
 **Still open, and worth a view at implementation time:** whether a probe that exits
 during the window should void the run or merely truncate it, and how the manifest
