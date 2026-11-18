@@ -92,6 +92,54 @@ regressions. Live-mode launching confirmed with a stub `bpftrace`: three probe
 scripts given, three observed to run. No probe attached to any host, no root used,
 no service installed.
 
+### Review of `0eb5d49`: two blockers, and what they changed
+
+Alice's review found that the producer was *structurally* unable to do its job in
+two ways that no amount of correct parsing would have fixed. Both are now closed
+at `495e48d`, each with a test that could not pass against the previous code.
+
+**Blocker 1 — no event could ever match a run.** `RunRegistry.for_event` reads
+`isolation_domain.scope`. The producer populated only `isolation_domain.id` — the
+cgroup *inode* the probes emit — leaving `scope` as `None`, so an event with
+cgroup `341251` and a registration for the same run returned
+`unmatched_due_to_scope` every time. Everything downstream of correlation was
+unreachable in practice.
+
+The probes emit an inode; correlation matches a scope name. Only the supervisor
+that launches the scope knows the pairing, so the producer now takes an explicit
+`scope_by_cgroup` map from it and populates both fields. Without the map the event
+stays honestly unmatchable — and live mode refuses to start, rather than
+producing a run of evidence that can never join.
+
+**Blocker 2 — gaps were recorded but constrained nothing.** Coverage compares a
+gap's `affected` labels against a claim's subject, which is an `EventType` value
+(`exec`, `write_attempt`, `read_attempt`, `connect`). The producer used invented
+labels — `malformed_event`, `unparsed_event_line`, `unrecognised_event` — so a gap
+was stored, counted, and then matched no claim at all. It looked like coverage
+handling and did nothing.
+
+A malformed line whose event *name* is readable is now scoped to the real subjects
+that class could produce (`open` → `read_attempt` + `write_attempt`). A line whose
+class is unknowable — untokenisable, or an unrecognised event name — becomes an
+**unscoped** gap, which coverage treats as applying to everything. That
+over-reports, and it is the honest choice: we do not know what we missed.
+
+**Three warnings, also addressed:** live mode now enforces its launch contract
+(`PermissionError` without root, `ValueError` without the scope map); gap events
+use the kernel clock rather than the wall clock, which had placed them in 1970
+relative to every other event; and `bpftrace` stderr is drained on a bounded
+thread, because leaving it unread until exit deadlocks a probe that writes more
+than the ~64 KiB pipe buffer.
+
+Verified after the fixes: **250 passed, 1 skipped** (the root-only branch of the
+privilege check).
+
+The pattern in both blockers is worth naming: the code was *locally* correct and
+*globally* inert — each half behaved, and the seam between them carried no
+information. Neither would have been caught by unit tests at the module boundary,
+which is why the tests added here assert the seam (an event resolving to a
+registered run; a gap changing a coverage verdict) rather than the fields.
+
 ## 3. The declared gaps
 
 From the Stage 1 result. Each is a capability the producer reports as
