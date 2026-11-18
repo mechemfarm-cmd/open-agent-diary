@@ -427,7 +427,7 @@ equivalent to a richer Linux one.
 
 ## 14. Stage 0 — evaluate, do not build
 
-Run against real activity on Art (the agent's own process tree). Ten questions:
+Run against real activity on Host B (the agent's own process tree). Ten questions:
 
 1. Can it trace the agent's actual process tree?
 2. Can it see exec, file writes, unlink, chmod and network effects?

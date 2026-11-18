@@ -16,7 +16,7 @@ code disagree, the code is what runs — which is why the code is committed.
 
 | Field | Value |
 | --- | --- |
-| Host | Emily only (not Art, not any other machine) |
+| Host | Host A only (not Host B, not any other machine) |
 | Operator | the agent, supervised by the operator |
 | Window | **NOT SET** — an explicit 20-minute window is named |
 | Prerequisite | review of this revision at this commit |
@@ -51,14 +51,14 @@ in section 9 and is not optional.
 **No persistent change** means: no package installed, no service enabled or
 disabled, no sysctl changed, no file outside the scratch path created or
 modified, no pinned BPF object left behind, no user or group changed, and no
-change to Emily's gateway, its config, or anything it supervises.
+change to Host A's gateway, its config, or anything it supervises.
 
 ---
 
 ## 2. Run identity and cgroup setup
 
 A gateway session does not put a manually launched workload in a unique scope,
-and Emily's own gateway, watchers and system services generate traffic
+and Host A's own gateway, watchers and system services generate traffic
 continuously. Without a dedicated scope every event is ambiguous between the
 workload and the host.
 
@@ -104,7 +104,7 @@ If that line is absent from `workload.log`, the run is void.
 - `--scope` keeps the whole workload in one cgroup.
 - `--collect` removes the unit even if the command fails.
 - `MemoryMax` and `CPUQuota` bound the *workload* so it cannot compete with
-  Emily's gateway.
+  Host A's gateway.
 - The loopback listener runs **outside** the scope, so it does not appear in
   attributed events.
 
@@ -143,7 +143,7 @@ also measured.
 The trigger has to happen in the recorded process. An external command such as
 `cat` forks, so it would open the file under a different PID and the filter would
 never match — which is exactly how the first attempt at this preflight failed, on
-Emily, before any part of the real run was attempted. The preflight voided the
+Host A, before any part of the real run was attempted. The preflight voided the
 run, as designed; nothing proceeded and cleanup was verified complete.
 
 **If the values differ, the run is void.** There is no fallback to process names
@@ -216,7 +216,7 @@ Run `scripts/check-probes.sh` from the `bounded-instrumentation-experiment`
 skill, or the two greps it performs. Expected: exactly one call,
 `str(args->filename)` in `exec.bt`; every `argv`/`envp` hit inside a comment.
 
-Each probe must also compile against Emily's own tracepoint definitions:
+Each probe must also compile against Host A's own tracepoint definitions:
 
 ```bash
 sudo bpftrace -d probes/exec.bt   # dry run: loads nothing, attaches nothing
@@ -229,14 +229,14 @@ plausible.
 
 ## 6. Scratch and the byte cap
 
-The scratch directory is a **256 MB tmpfs**, not a directory on Emily's disk:
+The scratch directory is a **256 MB tmpfs**, not a directory on Host A's disk:
 
 ```bash
 sudo mount -t tmpfs -o size=256M,mode=0700 tmpfs "$SCRATCH"
 ```
 
 This answers "what happens if it fills" without risking the host: writes fail
-with `ENOSPC`, probe output is lost, Emily's disk is untouched, and the run is
+with `ENOSPC`, probe output is lost, Host A's disk is untouched, and the run is
 void. A directory on the real filesystem would turn an induced-loss experiment
 into an uncontrolled disk test.
 
@@ -306,7 +306,7 @@ is not raised to chase a result.
 ### This measurement is host-wide, not scope-local
 
 The loss probe is deliberately **unfiltered**. It observes `openat` across the
-whole host, so Emily's own gateway, watchers and system services contribute to
+whole host, so Host A's own gateway, watchers and system services contribute to
 the pressure the buffer is under. The result is therefore **host-wide buffer
 pressure under a known local workload** — never presented as loss attributable
 solely to the churn scope. `session.json` records `scoped_to` in those words.
@@ -322,7 +322,7 @@ solely to the churn scope. `session.json` records `scoped_to` in those words.
    every poll tick for the whole window — by PID *and* start time, so a reused
    PID cannot impersonate it. If it dies before the window ends, the session is
    void even though the probe kept running. Otherwise a five-second burst
-   followed by 55 seconds of Emily's own activity would look like a valid
+   followed by 55 seconds of Host A's own activity would look like a valid
    result. `workload_duration_s`, `workload_status` and `workload_died_at_s` are
    recorded separately from `probe_duration_s`.
 
@@ -362,7 +362,7 @@ solely to the churn scope. `session.json` records `scoped_to` in those words.
 Stop immediately, and let the trap clean up, if:
 
 - tmpfs usage exceeds 200 MB and is still climbing;
-- Emily's load average exceeds 4× the pre-run baseline for 30 s;
+- Host A's load average exceeds 4× the pre-run baseline for 30 s;
 - any probe writes outside the scratch directory;
 - a probe PID survives `SIGINT`;
 - the workload reports a cgroup different from the one recorded;

@@ -15,21 +15,21 @@ that writes to Agent Diary.
 
 Recorded in `machine-plane-stage0-probes.md`; not repeated here.
 
-- `bpftrace` and `strace` are installed on Emily and Art. Kernels 6.8 and 7.0,
+- `bpftrace` and `strace` are installed on Host A and Host B. Kernels 6.8 and 7.0,
   BTF present, cgroup v2 mounted, no kernel lockdown.
 - No tetragon, falco, sysdig or auditd. Nothing to adopt; a sensor would be new.
 - `unprivileged_bpf_disabled=2` and `perf_event_paranoid=4` on both. A producer
   as an ordinary process cannot attach. Anything in this stage runs privileged.
 - `/usr/bin/env echo hi` produced 16 `execve` entries, 15 of them failed `$PATH`
   probes. Counting syscalls is not counting actions; outcome is the boundary.
-- Emily shows roughly 1,600 `openat` in 8 seconds, Art shows 1. The profile is
+- Host A shows roughly 1,600 `openat` in 8 seconds, Host B shows 1. The profile is
   host- and workload-specific, so no per-host rate threshold is defensible.
 - Process names at the tracepoint truncate at 15 characters, so names cannot be
   used as identity.
 
 ## What this stage would do
 
-Attach read-only `bpftrace` probes to **Emily only**, for two bounded sessions,
+Attach read-only `bpftrace` probes to **Host A only**, for two bounded sessions,
 and compare what the kernel reports against an **independent action manifest** —
 a list of actions the scripted workload intends to perform. Agent Diary is not
 read, exported or touched at all in this stage.
@@ -39,8 +39,8 @@ read, exported or touched at all in this stage.
 Where the two documents differ, the run sheet is authoritative: it holds the
 exact commands and is the thing that must be reviewed before attach.
 
-Emily is chosen because it is the busiest host and the one with the worst-case
-open rate. If the approach cannot cope with Emily, it will not cope anywhere.
+Host A is chosen because it is the busiest host and the one with the worst-case
+open rate. If the approach cannot cope with Host A, it will not cope anywhere.
 
 ### Measurement 1 — coverage and attribution
 
@@ -95,7 +95,7 @@ A sensor that changes the behaviour it is measuring is not neutral.
 
 These are conditions of running the stage, not aspirations.
 
-- **One host.** Emily. Not Art, not the rest of the fleet.
+- **One host.** Host A. Not Host B, not the rest of the fleet.
 - **Time-boxed.** Two sessions, each under ten minutes, plus analysis.
 - **Read-only.** No writes to the machine outside a scratch output directory.
   No service installed, no package added, no persistent probe.
@@ -133,12 +133,12 @@ produce a yes.
 
 ## Risks, stated plainly
 
-- **The numbers may be good on Emily and meaningless elsewhere.** One host is a
+- **The numbers may be good on Host A and meaningless elsewhere.** One host is a
   deliberate limit for cost, and it means the results generalise weakly. Stage 2
   would need a second host.
 - **A synthetic workload is easier than a real one.** A scripted session is not
   an agent doing something unexpected. Coverage measured this way is optimistic.
-- **Privileged probes are a real change to a production machine.** Emily runs the
+- **Privileged probes are a real change to a production machine.** Host A runs the
   gateway. The probes are read-only and time-boxed, but they are not free, and
   the host is not a lab.
 - **bpftrace may not be the right instrument.** If attribution proves poor, the

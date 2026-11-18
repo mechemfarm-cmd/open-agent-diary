@@ -241,5 +241,5 @@ should not, because that would contradict the view.
 
 - Development only. No probe attached to any host by the test suite; the producer
   is exercised against captured logs, which is why its log-reading mode exists.
-- One host was measured (Emily); the producer carries that provenance in its
+- One host was measured (Host A); the producer carries that provenance in its
   capability reasons rather than implying fleet-wide support.

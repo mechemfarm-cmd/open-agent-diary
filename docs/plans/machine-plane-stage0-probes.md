@@ -1,14 +1,14 @@
-# Machine plane — Stage 0 probes (Emily and Art)
+# Machine plane — Stage 0 probes (Host A and Host B)
 
 Read-only. Nothing installed, no configuration changed. Every number came from
 tools already present on the hosts.
 
-Supersedes `machine-plane-stage0-emily.md`, which covered Emily alone and
+Supersedes an earlier single-host version, which covered Host A alone and
 reported the file-activity finding before it had been repeated.
 
 ## Environment
 
-| Check | Emily | Art |
+| Check | Host A | Host B |
 | --- | --- | --- |
 | Kernel | 6.8.0-149-generic | 7.0.0-43-generic |
 | Container | no | no |
@@ -38,8 +38,8 @@ privilege separation the design depends on is only achievable if it does.
 
 | Host | 8-second `sys_enter_execve` trace |
 | --- | --- |
-| Emily | 0 events on an idle gateway |
-| Art | 0 events on an idle gateway |
+| Host A | 0 events on an idle gateway |
+| Host B | 0 events on an idle gateway |
 
 An agent host waiting for work spawns almost nothing. Encouraging for
 consequence-based filtering.
@@ -48,10 +48,10 @@ consequence-based filtering.
 
 | Host | 8-second `sys_enter_openat` trace |
 | --- | --- |
-| Emily | ~1,600 events |
-| Art | 1 event |
+| Host A | ~1,600 events |
+| Host B | 1 event |
 
-Emily's breakdown (second measurement, reproducing the first):
+Host A's breakdown (second measurement, reproducing the first):
 
 ```
 hermes-change-w   1109
@@ -63,9 +63,9 @@ upowerd             14
 asyncio_3           13
 ```
 
-The first reading measured Emily only and concluded that "the agent framework's
-own infrastructure dominates file activity". That was too strong. Art runs the
-same framework and is silent. Repeating the measurement on Emily confirmed the
+The first reading measured Host A only and concluded that "the agent framework's
+own infrastructure dominates file activity". That was too strong. Host B runs the
+same framework and is silent. Repeating the measurement on Host A confirmed the
 load is persistent rather than a transient — the same watcher, ~1,100 opens in
 8 seconds again — but the honest conclusion is narrower:
 
@@ -80,13 +80,13 @@ Consequences for the design, which stand:
   which is the point of scoping.
 - If scoping is ever loosened, the filter has to exclude infrastructure **by
   policy**, because there is no threshold that works on both hosts. A rule tuned
-  to Emily's 1,600 events would discard everything Art ever does.
+  to Host A's 1,600 events would discard everything Host B ever does.
 - Any per-host threshold is therefore wrong by construction. This is an argument
   for exclusion rules, not for rate limiting.
 
 ## Exec noise — one command, many events
 
-A bounded trace on Emily while running `/usr/bin/env echo hi` recorded **16
+A bounded trace on Host A while running `/usr/bin/env echo hi` recorded **16
 execve events for that one command**: `env` walks `$PATH` and calls `execve` on
 each candidate until one succeeds, so **15 were failed probes against binaries
 that do not exist**.
