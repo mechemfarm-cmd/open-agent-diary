@@ -20,7 +20,7 @@ CAPTURE_ID="mp1-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1
 BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
 SCOPE="mp-stage1-${CAPTURE_ID}"
 SCRATCH="/var/tmp/machine-plane-stage1/${CAPTURE_ID}"
-RESULT_DIR="/home/willard/reviews/stage1-${CAPTURE_ID}"
+RESULT_DIR="${RESULT_DIR:-$HOME/reviews/stage1-${CAPTURE_ID}}"
 
 LISTENER_PID=""
 SCOPE_JOB=""

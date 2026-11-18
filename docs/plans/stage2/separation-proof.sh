@@ -15,7 +15,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG="${MACHINE_PLANE_PKG:-/home/willard/development/oad-machineplane/machine-plane/src}"
+PKG="${MACHINE_PLANE_PKG:?set MACHINE_PLANE_PKG to the machine-plane src directory}"
 SPOOL_DIR="/var/tmp/mp2-separation-proof"
 SPOOL="$SPOOL_DIR/spool.jsonl"
 RECORDER="mp2-recorder"

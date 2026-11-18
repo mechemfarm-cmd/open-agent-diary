@@ -11,7 +11,7 @@
 #   - call any non-empty stderr "loss".
 #
 # SCOPE OF THE MEASUREMENT: the probe is deliberately UNFILTERED. It measures
-# openat pressure across the whole host, not only inside the churn scope. Emily's
+# openat pressure across the whole host, not only inside the churn scope. Host A's
 # own gateway and watchers contribute to the load. The result is therefore
 # host-wide buffer pressure, and must be reported that way — not as loss
 # attributable solely to the churn workload.
@@ -27,7 +27,7 @@ STALL_LIMIT=10      # seconds without a new published op count => stalled worklo
 CAPTURE_ID="mp1-loss-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SCOPE="mp-stage1-loss-${CAPTURE_ID}"
 SCRATCH="/var/tmp/machine-plane-stage1/${CAPTURE_ID}"
-RESULT_DIR="/home/willard/reviews/stage1-loss-${CAPTURE_ID}"
+RESULT_DIR="${RESULT_DIR:-$HOME/reviews/stage1-loss-${CAPTURE_ID}}"
 
 SCOPE_JOB=""
 PROBE_PID=""
@@ -326,7 +326,7 @@ cat >"$SCRATCH/session.json" <<JSON
 {
   "capture_id": "$CAPTURE_ID",
   "kind": "loss",
-  "scoped_to": "host-wide — probe is unfiltered; Emily's own activity contributes",
+  "scoped_to": "host-wide — probe is unfiltered; Host A's own activity contributes",
   "rb_pages": $RB_PAGES,
   "planned_duration_s": $DURATION,
   "probe_duration_s": $ELAPSED,
