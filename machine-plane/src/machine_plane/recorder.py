@@ -73,6 +73,7 @@ class RecorderConfig:
     probes: tuple[Path, ...]
     workload: tuple[str, ...]
     duration_s: float
+    attach_timeout_s: float = 15.0
     max_bytes: int = DEFAULT_MAX_BYTES
     journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
     recorder_id: str = RECORDER_NAME
@@ -269,6 +270,22 @@ class Recorder:
 
             collector = threading.Thread(target=_collect, daemon=True)
             collector.start()
+
+            # Hold the workload until every probe is listening. Without this the
+            # workload can finish before attachment completes, and the capture
+            # contains only the machine's own noise — which looks like success
+            # because the record count is high.
+            attached = getattr(producer, "attached", None)
+            if attached is not None:
+                if not attached.wait(timeout=self.config.attach_timeout_s):
+                    raise RuntimeError(
+                        "probes did not report attachment within "
+                        f"{self.config.attach_timeout_s}s"
+                    )
+            release = getattr(scope, "release", None)
+            if callable(release):
+                release()
+
             window_started = self.clock()
             scope.wait(self.config.duration_s)
 

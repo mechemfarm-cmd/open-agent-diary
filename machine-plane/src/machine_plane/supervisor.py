@@ -32,6 +32,18 @@ class SystemdScope:
     unit: str
     process: subprocess.Popen[bytes]
     _control_group: str
+    _gate: Path | None = None
+
+    def release(self) -> None:
+        """Let the workload start.
+
+        The workload is launched behind this gate precisely so the probes are
+        attached before it runs. A recorder that starts both and hopes will
+        capture a workload that has already exited.
+        """
+        if self._gate is not None:
+            self._gate.parent.mkdir(parents=True, exist_ok=True)
+            self._gate.write_text("go\n", encoding="utf-8")
 
     @property
     def name(self) -> str:
@@ -87,12 +99,21 @@ class SystemdSupervisor:
             raise SupervisorError("systemd-run is not available")
 
         unit = f"mp-{self.capture_id}.scope"
+        gate = Path("/run/machine-plane") / f"{self.capture_id}.gate"
+        if gate.exists():
+            gate.unlink()
+        # The gate is enforced here, not by the workload: a workload written by
+        # someone else has no reason to know it should wait.
         command = [
             "systemd-run",
             "--scope",
             "--quiet",
             f"--unit={unit}",
+            "--setenv", f"MP_GATE={gate}",
             "--",
+            "sh", "-c",
+            'while [ ! -f "$MP_GATE" ]; do sleep 0.05; done; exec "$@"',
+            "mp-workload",
             *workload,
         ]
         process = subprocess.Popen(
@@ -101,7 +122,9 @@ class SystemdSupervisor:
             stderr=subprocess.PIPE,
         )
         control_group = self._await_control_group(unit, process)
-        return SystemdScope(unit=unit, process=process, _control_group=control_group)
+        return SystemdScope(
+            unit=unit, process=process, _control_group=control_group, _gate=gate
+        )
 
     def _await_control_group(
         self, unit: str, process: subprocess.Popen[bytes]

@@ -143,6 +143,13 @@ class LinuxEBPFProducer(Producer):
         #: terminated exits non-zero by definition, and reporting that as a
         #: probe failure would make every successful run look broken.
         self._stopping = False
+        #: Set once every probe script has printed its start marker, which is
+        #: the only honest signal that attachment finished. The recorder holds
+        #: the workload behind a gate until this fires, because a workload that
+        #: starts and finishes in two seconds otherwise completes before any
+        #: probe is listening — producing a capture with no attributable events.
+        self.attached = threading.Event()
+        self._seen_probes: set[str] = set()
         self._capabilities = self._build_capabilities()
 
     # -- capabilities ----------------------------------------------------
@@ -211,6 +218,10 @@ class LinuxEBPFProducer(Producer):
         for process in self._live_processes:
             if process.poll() is None:
                 process.terminate()
+
+    def _expected_probes(self) -> set[str]:
+        """Probe names as the scripts announce them in their start marker."""
+        return {Path(path).stem for path in self._probe_paths}
 
     def require_live_prerequisites(self) -> None:
         """Check that this process can actually attach the probes.
@@ -353,8 +364,20 @@ class LinuxEBPFProducer(Producer):
                 # Unbalanced quoting: shlex cannot tokenise it at all.
                 yield self._gap("unparseable line")
                 continue
+            if not fields or fields[0] == "MARK":
+                # A start marker is the only honest evidence that a probe is
+                # attached and listening. The recorder holds the workload until
+                # every probe has one, because a workload that runs for two
+                # seconds otherwise finishes before attachment completes.
+                if len(fields) >= 3 and "phase=start" in fields:
+                    for field_value in fields[1:]:
+                        if field_value.startswith("probe="):
+                            self._seen_probes.add(field_value.split("=", 1)[1])
+                    if self._seen_probes.issuperset(self._expected_probes()):
+                        self.attached.set()
+                continue
             if not fields or fields[0] != "EV":
-                # MARK lines and the "Attaching N probes..." banner are expected.
+                # The "Attaching N probes..." banner is expected.
                 continue
 
             if len(fields) < 2:
