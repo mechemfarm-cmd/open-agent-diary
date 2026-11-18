@@ -1,7 +1,7 @@
 # Stage 1 run sheet — machine plane producer evaluation
 
-**Status:** not approved to run. Requires Alice's review of this revision and
-Bill's explicit window. Nothing here has been executed.
+**Status:** not approved to run. Requires review of this revision and
+an explicit operator window. Nothing here has been executed.
 
 Revision 2 — addresses the three execution blockers and two measurement
 clarifications from the run-sheet review at `44f91ed`.
@@ -17,14 +17,14 @@ code disagree, the code is what runs — which is why the code is committed.
 | Field | Value |
 | --- | --- |
 | Host | Emily only (not Art, not any other machine) |
-| Operator | Tom (agent), supervised by Bill |
-| Window | **NOT SET** — Bill names a 20-minute window explicitly |
-| Prerequisite | Alice's review of this revision at this commit |
+| Operator | the agent, supervised by the operator |
+| Window | **NOT SET** — an explicit 20-minute window is named |
+| Prerequisite | review of this revision at this commit |
 | Pointer exception | `str(args->filename)` in `exec.bt` — **approved** as pathname metadata |
 | Probe files | `probes/{exec,file,net}.bt` |
 | Baseline | `action-manifest.json` |
 
-No window exists until Bill states one. This document is the checklist, not the
+No window exists until the operator states one. This document is the checklist, not the
 authorisation.
 
 ---
@@ -43,7 +43,7 @@ changes are explicitly allowed, and nothing else is:
 3. A loopback HTTP listener on `127.0.0.1:18080`.
 4. Three BPF programs attached for the duration of the run and detached after.
 5. Files written under the scratch tmpfs, and one copy of that directory at
-   `/home/willard/reviews/stage1-<capture_id>`.
+   `$HOME/reviews/stage1-<capture_id>`.
 
 Everything in that list is removed before the run is reported. Verification is
 in section 9 and is not optional.
@@ -70,7 +70,7 @@ workload and the host.
 CAPTURE_ID="mp1-$(date -u +%Y%m%dT%H%M%SZ)-<6 hex>"
 SCOPE="mp-stage1-${CAPTURE_ID}"
 SCRATCH="/var/tmp/machine-plane-stage1/${CAPTURE_ID}"
-RESULT_DIR="/home/willard/reviews/stage1-${CAPTURE_ID}"
+RESULT_DIR="$HOME/reviews/stage1-${CAPTURE_ID}"
 BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
 ```
 
@@ -368,7 +368,7 @@ Stop immediately, and let the trap clean up, if:
 - the workload reports a cgroup different from the one recorded;
 - the preflight cgroup check fails;
 - the session passes 10 minutes;
-- Bill says stop — this overrides everything above without discussion.
+- The operator says stop — this overrides everything above without discussion.
 
 Post-run verification, all of which must hold:
 

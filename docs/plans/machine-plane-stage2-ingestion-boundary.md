@@ -94,7 +94,7 @@ no service installed.
 
 ### Review of `0eb5d49`: two blockers, and what they changed
 
-Alice's review found that the producer was *structurally* unable to do its job in
+Review found that the producer was *structurally* unable to do its job in
 two ways that no amount of correct parsing would have fixed. Both are now closed
 at `495e48d`, each with a test that could not pass against the previous code.
 
@@ -142,7 +142,7 @@ registered run; a gap changing a coverage verdict) rather than the fields.
 
 ### Outcome
 
-Alice's review approved Stage 2 at `495e48d` / `b64fd7e` for the current scope:
+Review approved Stage 2 at `495e48d` / `b64fd7e` for the current scope:
 the producer and the demonstrated ingestion boundary. Two non-blocking notes
 followed, both fixed at `575e307`:
 

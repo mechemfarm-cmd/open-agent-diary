@@ -3,8 +3,9 @@
 **Status:** proposal for review. Nothing here has been built or run.
 **Predecessors:** Stage 1 closed (final result approved); Stage 2 approved at
 `495e48d` / `b64fd7e` for the producer and the demonstrated ingestion boundary.
-**Target host:** Emily.
-**Author:** Tom. Written for Alice's review, then Bill's authorization.
+**Target host:** the reference host.
+**Author:** the implementer. Written for review, then the operator's
+authorization.
 
 ---
 
@@ -71,18 +72,15 @@ the label.
 §1.3 of the design says it plainly: *"Agent with sudo. Explicitly outside the
 guarantee."*
 
-**On Emily today, the agent has passwordless sudo.** It is the same account
-(`willard`, uid 1000, home `/home/willard`) that owns the Hermes gateway, and it
-can become root in one command without a password.
+**On the reference host, the agent has passwordless sudo.** It is the same
+account that owns the agent's gateway process, and it can become root in one
+command without a password.
 
-Verified on Emily while writing this, not assumed:
-
-```
-$ sudo -n true          -> succeeds, no password
-$ grep -rl willard /etc/sudoers.d/
-  /etc/sudoers.d/tom
-  /etc/sudoers.d/netmap-wifi
-```
+Verified at proposal time, not assumed: `sudo -n true` from that account succeeds
+with no password, and more than one drop-in under `/etc/sudoers.d/` names it. The
+account, the host and the grant filenames are deliberately **not** recorded here —
+this document is published, and the installer reports them at runtime to the
+person who owns the machine.
 
 That has a specific consequence:
 
@@ -124,12 +122,12 @@ At install, in plain language, before anything is written:
 ```
 MACHINE PLANE — PROTECTION LEVEL: ADVISORY
 
-The agent runs as account "willard", which can become root without a
-password.
+The agent runs as account "agent-account", which can become root without
+a password.
 
 Matching grants:
-  /etc/sudoers.d/tom
-  /etc/sudoers.d/netmap-wifi
+  /etc/sudoers.d/<grant>
+  /etc/sudoers.d/<grant>
 
 The recorder will still record what the agent does. What it cannot
 guarantee is that the record is untampered — an agent that decided to
@@ -172,8 +170,8 @@ rather than continues.
 
 ### 2.4 Decision
 
-Bill has chosen **(a): deploy now, advisory, with the trade-off stated to the
-user and the decision left to them.** That is what this section specifies, and it
+The operator has chosen **(a): deploy now, advisory, with the trade-off stated to
+the user and the decision left to them.** That is what this section specifies, and it
 is why the detection, the prompt, and the standing display are in Stage 3 rather
 than deferred. A user who is told plainly and chooses anyway has made an informed
 decision; a user who is told nothing has been misled, whether or not the code is
@@ -370,7 +368,7 @@ written around.
 10. No content beyond the declared metadata fields appears in any record —
     checked by scanning a real segment for fields the schema does not define.
 
-11. Containment detection reports `advisory` for the agent's account on Emily and
+11. Containment detection reports `advisory` for the agent's account on the reference host and
     names every matching grant — not a generic "your agent may escalate".
 12. The install prompt defaults to no: an empty answer aborts, and nothing is
     written under `/etc/machine-plane/`.
@@ -383,9 +381,9 @@ written around.
 16. Detection on the purpose-made unprivileged test account reports `enforced` —
     proving the detector discriminates, rather than always answering `advisory`.
 
-Check 7 must be run with an account that does not have sudo. On Emily, that means
-a purpose-made account for the test, because `willard` has sudo and would pass the
-check for the wrong reason. This is the concrete consequence of section 2 — and
+Check 7 must be run with an account that does not have sudo. On the reference host, that means
+a purpose-made account for the test, because the agent's own account has sudo and would pass
+the check for the wrong reason. This is the concrete consequence of section 2 — and
 checks 11 and 16 together are the proof that the system knows which case it is in,
 rather than reciting a fixed warning.
 
@@ -396,7 +394,7 @@ rather than reciting a fixed warning.
 - **Not** observer mode, not gateway integration.
 - **Not** content capture. Metadata only, unchanged.
 - **Not** a change to how Hermes runs, its account, or its configuration.
-- **Not** any second host. Emily only.
+- **Not** any second host. the reference host only.
 
 ## 13. Risk and rollback
 
@@ -409,20 +407,20 @@ changes at any point, because nothing in the agent path is modified.
 
 The real risk is not the recorder; it is **the window**. Attaching probes costs
 CPU and generates real output volume — Stage 1 measured approximately 400 KB/s
-for a busy workload — and an always-on recorder on Emily's SD card would be a
+for a busy workload — and an always-on recorder on the reference host's SD card would be a
 problem for a host that already shows SATA timeouts. **Stage 3 runs bounded: one
 named workload, one measured window, then detach.** Always-on is a separate
 decision that needs its own numbers, and should not be assumed to follow from a
 successful deployment.
 
-## 14. Questions for Alice
+## 14. Questions for review
 
 1. Is the renumbering in §1 acceptable, or should the deployment fold into
    Stage 4 as its first half?
 2. Is the advisory/enforced gate the right shape — detection at install *and*
    every start, a default-no prompt, a recorded consent file, and the level
    stamped into every terminal record — or is the record more ceremony than the
-   protection warrants? Bill's decision is to deploy in advisory mode and let the
+   protection warrants? The decision is to deploy in advisory mode and let the
    user decide; the question is whether this is the honest way to present it.
 3. Supervisor mode only, or is observer mode required before this counts as
    deployed?

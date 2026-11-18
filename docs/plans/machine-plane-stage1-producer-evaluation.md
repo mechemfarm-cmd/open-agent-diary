@@ -114,7 +114,7 @@ These are conditions of running the stage, not aspirations.
 - Build or install the privileged switch component.
 - Define the ingestion boundary into Agent Diary.
 - Add a producer to the repository.
-- Run on any host Bill does not name.
+- Run on any host the operator does not name.
 - Continue past the time box to "get a better number".
 
 ## Deliverable
@@ -147,9 +147,9 @@ produce a yes.
 
 ## Decision required before this runs
 
-Approval from Alice as a bounded review, and from Bill for the host and the
+Approval as a bounded review, and from the operator for the host and the
 window. Neither is implied by the core approval at `3cbf14a`.
 
 The run sheet at `stage1/run-sheet.md` is the checklist that has to be satisfied
-first. It is not a substitute for Bill naming a window, and no window exists
+first. It is not a substitute for the operator naming a window, and no window exists
 until he does.
