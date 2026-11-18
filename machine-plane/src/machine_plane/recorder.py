@@ -251,10 +251,19 @@ class Recorder:
             # draining it inline would mean the duration was never reached.
             errors: list[BaseException] = []
 
+            redact = getattr(producer, "redact", None)
+
             def _collect() -> None:
                 try:
                     for raw in producer.collect():
-                        writer.append(producer.normalize(raw))
+                        event = producer.normalize(raw)
+                        # The pipeline's redaction stage is not optional. Skipping
+                        # it stored absolute paths from the one approved pathname
+                        # dereference: approval to read a path is not approval to
+                        # store one.
+                        if callable(redact):
+                            event = redact(event)
+                        writer.append(event)
                 except BaseException as collect_error:  # noqa: BLE001
                     errors.append(collect_error)
 

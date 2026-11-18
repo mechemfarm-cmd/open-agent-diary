@@ -106,6 +106,12 @@ PATH_EVENT_TYPES = frozenset(
         EventType.RENAME,
         EventType.UNLINK,
         EventType.METADATA_CHANGE,
+        # EXEC belongs here for the same reason as the rest: its target is a
+        # pathname. It was missing, so an exec target passed through redaction
+        # untouched — and because the exec pathname is the one pointer read the
+        # probe set is approved to take, that left exactly the approved path as
+        # the one path stored in full.
+        EventType.EXEC,
     }
 )
 
