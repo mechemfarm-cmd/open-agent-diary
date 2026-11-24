@@ -18,6 +18,7 @@ therefore written once, plainly.
 from __future__ import annotations
 
 import os
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -108,6 +109,16 @@ class RecorderConfig:
         return config_fingerprint(self.fingerprint_payload())
 
 
+class SegmentCollision(RuntimeError):
+    """A segment path already exists, so this run would overwrite an artifact.
+
+    Refusing is the point. The store keeps every record imported from a segment, so
+    overwriting one silently destroys the artifact those records came from while
+    leaving the records behind — which is how 118,813 records ended up pointing at
+    files that no longer match them.
+    """
+
+
 class SegmentWriter:
     """One run's segment: written as ``.partial``, sealed by rename.
 
@@ -126,11 +137,51 @@ class SegmentWriter:
         sequence: int,
         recorder_id: str,
         mode: int = 0o640,
+        #: Injectable so a test can force two runs to claim the same identity.
+        #: Production always generates one.
+        segment_token: str | None = None,
     ) -> None:
         self.spool_dir = Path(spool_dir)
-        stem = f"segment-{boot_id[:8] or 'noboot'}-{sequence:06d}-{capture_id}"
+        # The sequence is a count of sealed files, and retention changes that count, so
+        # it can repeat. The capture id is operator-supplied and can be reused. Neither
+        # is unique on its own, and a collision overwrites an artifact whose records are
+        # already in the store. The token is what makes the identity globally unique.
+        self.segment_id = segment_token or secrets.token_hex(8)
+        stem = (
+            f"segment-{boot_id[:8] or 'noboot'}-{sequence:06d}-{capture_id}"
+            f"-{self.segment_id[:8]}"
+        )
         self.partial = self.spool_dir / f"{stem}.ndjson.partial"
         self.sealed = self.spool_dir / f"{stem}.ndjson"
+        self.voided = self.spool_dir / f"{stem}.ndjson.voided"
+
+        # Refuse before writing anything. A reserved partial, a sealed segment, a
+        # voided one, or a quarantined copy all mean this identity is taken.
+        for candidate in (self.partial, self.sealed, self.voided):
+            if candidate.exists():
+                raise SegmentCollision(
+                    f"{candidate.name} already exists — refusing to reuse a segment "
+                    "identity, because publishing over it would destroy an artifact "
+                    "the store already holds records from"
+                )
+
+        # Reserve the partial exclusively, before the workload starts. O_EXCL is what
+        # makes the reservation atomic: two runs racing for the same identity cannot
+        # both win, and neither can adopt a file another run left behind.
+        try:
+            descriptor = os.open(
+                self.partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode
+            )
+        except FileExistsError as error:
+            # The exists() check above cannot be atomic with the create, so two runs
+            # racing for one identity can both pass it. O_EXCL is what actually
+            # arbitrates, and its failure is the same refusal, not a stray OSError.
+            raise SegmentCollision(
+                f"{self.partial.name} already exists — another run holds this "
+                "segment identity"
+            ) from error
+        os.close(descriptor)
+
         self._spool = Spool(self.partial, recorder_id, mode=mode)
         self.records = 0
 
@@ -149,7 +200,15 @@ class SegmentWriter:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        os.replace(self.partial, self.sealed)
+        # link() fails with FileExistsError if the destination exists; replace()
+        # silently overwrites it. That difference is the whole bug.
+        try:
+            os.link(self.partial, self.sealed)
+        except FileExistsError as error:
+            raise SegmentCollision(
+                f"{self.sealed.name} already exists — refusing to publish over it"
+            ) from error
+        os.unlink(self.partial)
         _fsync_dir(self.spool_dir)
         return self.sealed
 
@@ -192,6 +251,7 @@ class Recorder:
         self.producer_factory = producer_factory
         self.boot_id = boot_id
         self.sequence = sequence
+        self._segment_id: str | None = None
         self.clock = clock
         self.wall = wall
         self.detection = detection
@@ -241,6 +301,8 @@ class Recorder:
                 recorder_id=self.config.recorder_id,
             )
 
+            self._segment_id = writer.segment_id
+
             writer.append(
                 self._lifecycle(
                     EventType.RECORDER_STARTED,
@@ -252,6 +314,7 @@ class Recorder:
                         "protection_level": level.value,
                         "supervisor_mode": "supervisor",
                         "capture_mode": self.config.capture_mode,
+                        "segment_id": self._segment_id,
                     },
                 )
             )
@@ -367,6 +430,7 @@ class Recorder:
                     "protection_level": level.value,
                     "capture_id": self.config.capture_id,
                     "capture_mode": self.config.capture_mode,
+                    "segment_id": self._segment_id,
                     "dropped_this_run": len(dropped),
                     # The producer counts what the kernel let through; the importer
                     # counts what arrived. Two layers, two numbers, reconciled

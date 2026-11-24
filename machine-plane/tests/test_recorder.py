@@ -184,7 +184,6 @@ class TestFailure(RecorderTestCase):
 class TestTornTails(RecorderTestCase):
     def test_a_leftover_partial_is_sealed_as_a_torn_tail(self) -> None:
         self.spool.mkdir(parents=True, exist_ok=True)
-        partial = self.spool / "segment-boot1234-000000-cap-0.ndjson.partial"
         writer = SegmentWriter(
             self.spool,
             capture_id="cap-0",
@@ -192,6 +191,7 @@ class TestTornTails(RecorderTestCase):
             sequence=0,
             recorder_id="machine-plane-recorder",
         )
+        partial = writer.partial
         writer.append(
             MachineEvent(
                 type=EventType.OPEN,
@@ -210,7 +210,7 @@ class TestTornTails(RecorderTestCase):
 
         self.assertEqual(len(sealed), 1)
         self.assertEqual(list(self.spool.glob("*.partial")), [])
-        published = self.spool / "segment-boot1234-000000-cap-0.ndjson"
+        published = writer.sealed
         self.assertTrue(published.exists())
         last = json.loads(published.read_text(encoding="utf-8").splitlines()[-1])
         self.assertEqual(last["event"]["result"], "torn_tail")
