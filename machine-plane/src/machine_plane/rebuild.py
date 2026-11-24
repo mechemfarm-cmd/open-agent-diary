@@ -297,42 +297,43 @@ class StagedStore:
 def stage(snapshot: Path, plan: Plan, staging_dir: Path) -> tuple[list[StagedStore], dict]:
     """Write the three destination stores in source order. Nothing live is touched.
 
-    Records are written in source order, so each destination is a stable subsequence of
-    the source and relative order within a store is preserved and verifiable.
+    Records are copied as **raw bytes**, not re-serialised. Re-encoding would make the
+    output merely equivalent to the source, and payload verification would then be
+    checking our serialiser rather than the data. Byte-for-byte is the claim, so bytes are
+    what move.
     """
     staging_dir.mkdir(parents=True, exist_ok=True)
     handles = {}
     for destination in DESTINATIONS:
         path = staging_dir / f"{destination}.ndjson"
-        handles[destination] = (path, path.open("w", encoding="utf-8"))
+        handles[destination] = (path, path.open("wb"))
 
     counts = {destination: 0 for destination in DESTINATIONS}
     per_key: dict[str, str] = {}
     try:
-        with snapshot.open("r", encoding="utf-8") as source:
-            for line in source:
-                if not line.strip():
+        with snapshot.open("rb") as source:
+            for raw in source:
+                if not raw.strip():
                     continue
-                record = json.loads(line)
+                record = json.loads(raw.decode("utf-8"))
                 key = record["record_key"]
                 if key in per_key:
                     raise RebuildRefused(f"duplicate record_key in the source: {key}")
                 segment = key.split(":", 2)[1]
                 destination = plan.destination_for(segment)
 
-                if destination == EVIDENCE and plan.routes[segment].classification in NEVER_PROMOTED:
+                route = plan.routes[segment]
+                if destination == EVIDENCE and route.classification in NEVER_PROMOTED:
                     raise RebuildRefused(
-                        f"{segment} is {plan.routes[segment].classification} and must "
-                        "never reach the evidence store"
+                        f"{segment} is {route.classification} and must never reach the "
+                        "evidence store"
                     )
 
                 path, handle = handles[destination]
-                handle.write(line if line.endswith("\n") else line + "\n")
+                handle.write(raw)
                 counts[destination] += 1
-                # Payload bytes as they appear in the source, for key-based comparison.
-                per_key[key] = hashlib.sha256(
-                    json.dumps(record.get("event"), sort_keys=True).encode("utf-8")
-                ).hexdigest()
+                # The exact bytes as they appear in the source, newline included.
+                per_key[key] = hashlib.sha256(raw).hexdigest()
     finally:
         for path, handle in handles.values():
             handle.flush()
@@ -355,9 +356,6 @@ def stage(snapshot: Path, plan: Plan, staging_dir: Path) -> tuple[list[StagedSto
     return staged, {"per_key": per_key, "counts": counts}
 
 
-# -- verification -------------------------------------------------------------
-
-
 def verify(
     snapshot: Path,
     staged: list[StagedStore],
@@ -368,12 +366,13 @@ def verify(
 ) -> list[str]:
     """Every check the proposal specifies, run against the staged stores.
 
-    Returns the problems found. An empty list means the staging may be swapped in.
+    Payload comparison is on **raw record bytes** keyed by record_key. Hashing
+    canonicalised JSON would miss changes to envelope fields, formatting, key order or
+    newline representation — it would compare our parser's view, not the record.
     """
     problems: list[str] = []
     by_destination = {s.destination: s for s in staged}
 
-    # Counts, and that the three account for the source exactly.
     for destination in DESTINATIONS:
         expected = plan.expected_counts[destination]
         actual = by_destination[destination].records
@@ -383,46 +382,38 @@ def verify(
     if total != plan.source_records:
         problems.append(f"staged {total} records, source has {plan.source_records}")
 
-    # Exactly once, by key, across the destinations — compared as sets, not counts.
     seen: dict[str, str] = {}
     duplicates: list[str] = []
     for staged_store in staged:
-        with staged_store.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
+        with staged_store.path.open("rb") as handle:
+            for raw in handle:
+                if not raw.strip():
                     continue
-                record = json.loads(line)
-                key = record["record_key"]
+                key = json.loads(raw.decode("utf-8"))["record_key"]
                 if key in seen:
                     duplicates.append(key)
-                seen[key] = hashlib.sha256(
-                    json.dumps(record.get("event"), sort_keys=True).encode("utf-8")
-                ).hexdigest()
+                seen[key] = hashlib.sha256(raw).hexdigest()
     if duplicates:
         problems.append(f"{len(duplicates)} record_key(s) appear in more than one store")
-    missing = set(staging_meta["per_key"]) - set(seen)
-    if missing:
+    if missing := set(staging_meta["per_key"]) - set(seen):
         problems.append(f"{len(missing)} source record(s) absent from every store")
-    extra = set(seen) - set(staging_meta["per_key"])
-    if extra:
+    if extra := set(seen) - set(staging_meta["per_key"]):
         problems.append(f"{len(extra)} staged record(s) not present in the source")
 
-    # Payload bytes identical for the same key.
-    mismatched = [
+    changed = [
         key
         for key, digest in seen.items()
         if key in staging_meta["per_key"] and staging_meta["per_key"][key] != digest
     ]
-    if mismatched:
-        problems.append(f"{len(mismatched)} record(s) changed payload")
+    if changed:
+        problems.append(f"{len(changed)} record(s) changed bytes")
 
-    # No promotion: checked by joining staged evidence records back to the manifest.
     evidence = by_destination[EVIDENCE]
-    with evidence.path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
+    with evidence.path.open("rb") as handle:
+        for raw in handle:
+            if not raw.strip():
                 continue
-            segment = json.loads(line)["record_key"].split(":", 2)[1]
+            segment = json.loads(raw.decode("utf-8"))["record_key"].split(":", 2)[1]
             route = plan.routes.get(segment)
             if route is None:
                 problems.append(f"evidence record from unclassified segment {segment}")
@@ -438,7 +429,6 @@ def verify(
                 )
                 break
 
-    # Provenance: every evidence segment's artifact still hashes as reviewed.
     for route in plan.routes.values():
         if route.destination != EVIDENCE:
             continue
@@ -448,7 +438,6 @@ def verify(
         elif route.artifact_sha256 and sha256_file(artifact) != route.artifact_sha256:
             problems.append(f"{route.name}: artifact changed during the rebuild")
 
-    # Destination integrity against what the transaction manifest will record.
     for staged_store in staged:
         if staged_store.bytes != staged_store.path.stat().st_size:
             problems.append(f"{staged_store.destination}: byte count changed")
@@ -523,11 +512,32 @@ def write_transaction(
     return txn_dir
 
 
-def swap(store: Path, txn_dir: Path, staged: list[StagedStore], txn_id: str) -> None:
-    """Rename each store aside, then install the staged one, recording each step.
+def _move_no_replace(source: Path, destination: Path) -> None:
+    """Move a file without ever clobbering the destination.
 
-    Progress is fsynced after every rename and before the next begins, so an interrupted
-    swap is always explainable from the log.
+    os.rename() overwrites silently. link() fails when the destination exists, so a file
+    that appeared unexpectedly becomes a refusal instead of a destroyed generation.
+    """
+    if destination.exists():
+        raise RebuildRefused(
+            f"{destination} already exists — refusing to overwrite it during the swap"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, destination)
+    except FileExistsError as error:
+        raise RebuildRefused(
+            f"{destination} appeared while swapping — refusing to overwrite it"
+        ) from error
+    os.unlink(source)
+
+
+def swap(store: Path, txn_dir: Path, staged: list[StagedStore], txn_id: str) -> None:
+    """Move each store aside, then install the staged one, recording every step.
+
+    Progress is fsynced after each rename and before the next begins, so an interrupted
+    swap is always explainable from the log — and recover() reads that log to decide
+    what to undo.
     """
     progress = txn_dir / "progress.log"
     superseded = store / f"superseded-{txn_id}"
@@ -541,31 +551,34 @@ def swap(store: Path, txn_dir: Path, staged: list[StagedStore], txn_id: str) -> 
         _fsync_dir(txn_dir)
 
     for staged_store in staged:
-        live = store / staged_store.destination
         live_dir = store / staged_store.destination
         live_file = live_dir / "events.ndjson"
+        aside = superseded / staged_store.destination
 
         if live_file.exists():
-            aside = superseded / staged_store.destination
-            aside.parent.mkdir(parents=True, exist_ok=True)
-            os.rename(live_file, aside)
+            _move_no_replace(live_file, aside)
             _fsync_dir(live_file.parent)
             record(f"moved-aside   {staged_store.destination}")
 
         live_dir.mkdir(parents=True, exist_ok=True)
-        os.rename(staged_store.path, live_file)
+        _move_no_replace(staged_store.path, live_file)
         _fsync_dir(live_file.parent)
         record(f"installed     {staged_store.destination}")
 
-    # Checkpoints are keyed by segment; the rebuild changes which segments the evidence
-    # store holds, so a stale checkpoint must not be carried forward.
     checkpoints = store / "checkpoints"
     if checkpoints.exists():
-        os.rename(checkpoints, superseded / "checkpoints")
-        _fsync_dir(store)
+        _move_no_replace_dir(checkpoints, superseded / "checkpoints")
         record("moved-aside   checkpoints")
 
     _write_durably(txn_dir / "COMPLETE", txn_id)
+
+
+def _move_no_replace_dir(source: Path, destination: Path) -> None:
+    if destination.exists():
+        raise RebuildRefused(f"{destination} already exists — refusing to overwrite it")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(source, destination)
+    _fsync_dir(destination.parent)
 
 
 def incomplete_transaction(store: Path) -> Path | None:
@@ -579,36 +592,113 @@ def incomplete_transaction(store: Path) -> Path | None:
     return None
 
 
+#: The only progress sequences a destination may show, in the documented order.
+ALLOWED_PROGRESS = {
+    (): "untouched",
+    ("moved-aside",): "interrupted before install",
+    ("moved-aside", "installed"): "interrupted after install",
+    ("installed",): "installed with no previous generation",
+}
+
+
+def read_progress(txn_dir: Path) -> dict[str, list[str]]:
+    """Parse progress.log into per-destination action sequences, validating them."""
+    log = txn_dir / "progress.log"
+    steps: list[tuple[str, str]] = []
+    if log.exists():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            if len(parts) < 2:
+                raise RebuildRefused(f"malformed progress entry: {line!r}")
+            steps.append((parts[0], parts[1]))
+
+    per: dict[str, list[str]] = {destination: [] for destination in DESTINATIONS}
+    for action, destination in steps:
+        if action not in {"moved-aside", "installed"}:
+            raise RebuildRefused(f"unknown progress action {action!r}")
+        if destination not in per:
+            raise RebuildRefused(f"progress entry for unknown store {destination!r}")
+        per[destination].append(action)
+
+    for destination, actions in per.items():
+        if tuple(actions) not in ALLOWED_PROGRESS:
+            raise RebuildRefused(
+                f"{destination}: progress entries out of order ({actions}) — refusing to "
+                "infer what happened"
+            )
+    return per
+
+
 def recover(store: Path) -> str:
-    """Roll back an interrupted swap. Never rolls forward.
+    """Roll back an interrupted swap, using the progress log to know what was done.
 
     Roll-forward is deliberately absent: completing a partial swap means trusting staged
     files whose installation was interrupted, and choosing to finish is a judgement about
-    which generation is real. The previous generation is only ever renamed, so rollback
-    is always available and is always the safe direction.
+    which generation is real. Rollback is always available because the previous generation
+    is only ever renamed.
+
+    The log is the authority on what happened, and the filesystem must agree with it. A
+    state the log explains is undone; a state it does not explain is a refusal.
     """
     txn_dir = incomplete_transaction(store)
     if txn_dir is None:
         return "nothing to recover"
+
     txn_id = txn_dir.name
     superseded = store / f"superseded-{txn_id}"
+    per = read_progress(txn_dir)
     restored: list[str] = []
+    removed: list[str] = []
 
     for destination in DESTINATIONS:
         live = store / destination / "events.ndjson"
         aside = superseded / destination
-        if aside.exists():
-            live.parent.mkdir(parents=True, exist_ok=True)
-            if live.exists():
-                # Both present with no progress entry explaining it: two candidate
-                # generations for one identity. Refuse rather than pick one.
+        actions = tuple(per[destination])
+
+        if actions == ():
+            # Untouched. Anything present for this destination contradicts the log.
+            staged_left = list(
+                (store / ".rebuild-staging").glob(f"*/{destination}.ndjson")
+            )
+            if aside.exists() or staged_left:
                 raise RebuildRefused(
-                    f"{destination}: both a live store and a moved-aside copy exist — "
-                    "refusing to choose between them; resolve by hand"
+                    f"{destination}: filesystem has state the progress log does not "
+                    "explain — refusing to guess"
                 )
+            continue
+
+        if actions == ("moved-aside",):
+            if not aside.exists():
+                raise RebuildRefused(
+                    f"{destination}: log says moved-aside but no moved copy exists"
+                )
+            if live.exists():
+                raise RebuildRefused(
+                    f"{destination}: live copy present with no installed entry in the log"
+                )
+            live.parent.mkdir(parents=True, exist_ok=True)
             os.rename(aside, live)
             _fsync_dir(live.parent)
             restored.append(destination)
+
+        elif actions in (("moved-aside", "installed"), ("installed",)):
+            # The installed generation is what rollback removes.
+            if live.exists():
+                os.unlink(live)
+                _fsync_dir(live.parent)
+                removed.append(destination)
+            if actions == ("moved-aside", "installed"):
+                if not aside.exists():
+                    raise RebuildRefused(
+                        f"{destination}: previous generation is missing, so rollback is "
+                        "impossible — refusing to leave a half-restored store"
+                    )
+                live.parent.mkdir(parents=True, exist_ok=True)
+                os.rename(aside, live)
+                _fsync_dir(live.parent)
+                restored.append(destination)
 
     if (superseded / "checkpoints").exists():
         target = store / "checkpoints"
@@ -617,4 +707,8 @@ def recover(store: Path) -> str:
             _fsync_dir(store)
 
     _write_durably(txn_dir / "ROLLED_BACK", txn_id)
-    return f"rolled back {txn_id}: restored {', '.join(restored) or 'nothing'}"
+    return (
+        f"rolled back {txn_id}: removed {', '.join(removed) or 'nothing'}; "
+        f"restored {', '.join(restored) or 'nothing'}"
+    )
+
