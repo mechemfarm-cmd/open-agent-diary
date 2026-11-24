@@ -512,6 +512,19 @@ def recover_torn_tails(spool_dir: Path, *, recorder_id: str = RECORDER_NAME) -> 
     sealed: list[str] = []
     for partial in sorted(Path(spool_dir).glob("segment-*.ndjson.partial")):
         stem = partial.name[: -len(".partial")]
+        destination = Path(spool_dir) / stem
+
+        # Recovery obeys the same invariant as publication: a sealed artifact is never
+        # overwritten. A partial and its sealed twin existing together is a provenance
+        # conflict — two candidate histories for one identity — and silently picking
+        # one is exactly the failure this whole fix exists to prevent. Checked before
+        # anything is appended, so the partial stays byte-identical when we refuse.
+        if destination.exists():
+            raise SegmentCollision(
+                f"{destination.name} already exists — refusing to seal the torn tail "
+                f"in {partial.name} over a sealed artifact; resolve the conflict by hand"
+            )
+
         writer_partial = partial
         spool = Spool(writer_partial, recorder_id)
         spool.append(
@@ -526,6 +539,16 @@ def recover_torn_tails(spool_dir: Path, *, recorder_id: str = RECORDER_NAME) -> 
                 platform_details={"sealed_on_recovery": True},
             )
         )
-        os.replace(writer_partial, Path(spool_dir) / stem)
+        # link() fails if the destination appeared since the check above; replace()
+        # would overwrite it. The window is small but the consequence is the bug.
+        try:
+            os.link(writer_partial, destination)
+        except FileExistsError as error:
+            raise SegmentCollision(
+                f"{destination.name} appeared while sealing {partial.name} — refusing "
+                "to overwrite a sealed artifact"
+            ) from error
+        os.unlink(writer_partial)
+        _fsync_dir(Path(spool_dir))
         sealed.append(stem)
     return sealed

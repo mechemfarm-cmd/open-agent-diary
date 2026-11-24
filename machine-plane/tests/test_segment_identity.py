@@ -160,3 +160,42 @@ class TestRaces(SegmentIdentityTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecoveryIsFailClosed(SegmentIdentityTestCase):
+    """Recovery must obey the same invariant as publication, not just the main path."""
+
+    def recover(self):
+        from machine_plane.recorder import recover_torn_tails
+
+        return recover_torn_tails(self.spool, recorder_id=RECORDER)
+
+    def test_a_sealed_twin_is_never_overwritten(self) -> None:
+        writer = self.writer(segment_token="torn0001")
+        writer.append(event(0))
+        # A sealed artifact exists under the same identity, and a partial survives
+        # alongside it: two candidate histories.
+        writer.sealed.write_text("the sealed artifact", encoding="utf-8")
+        partial_before = writer.partial.read_bytes()
+
+        with self.assertRaises(SegmentCollision):
+            self.recover()
+
+        self.assertEqual(
+            writer.sealed.read_text(encoding="utf-8"),
+            "the sealed artifact",
+            "the sealed artifact was overwritten",
+        )
+        self.assertEqual(
+            writer.partial.read_bytes(), partial_before, "the partial was modified"
+        )
+
+    def test_a_lone_partial_still_seals(self) -> None:
+        writer = self.writer(segment_token="torn0002")
+        writer.append(event(0))
+
+        sealed = self.recover()
+
+        self.assertEqual(len(sealed), 1)
+        self.assertTrue(writer.sealed.exists())
+        self.assertFalse(writer.partial.exists())
