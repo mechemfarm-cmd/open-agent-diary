@@ -532,16 +532,28 @@ def _move_no_replace(source: Path, destination: Path) -> None:
     os.unlink(source)
 
 
-def swap(store: Path, txn_dir: Path, staged: list[StagedStore], txn_id: str) -> None:
+def swap(
+    store: Path,
+    txn_dir: Path,
+    staged: list[StagedStore],
+    txn_id: str,
+    *,
+    after_step=None,
+) -> None:
     """Move each store aside, then install the staged one, recording every step.
 
     Progress is fsynced after each rename and before the next begins, so an interrupted
     swap is always explainable from the log — and recover() reads that log to decide
     what to undo.
+
+    ``after_step`` is a fault-injection seam for crash-boundary tests: it is called after
+    each recorded step, with the step number, and may raise to simulate a crash at that
+    exact durable point. Production passes None.
     """
     progress = txn_dir / "progress.log"
     superseded = store / f"superseded-{txn_id}"
     superseded.mkdir(parents=True, exist_ok=True)
+    step = [0]
 
     def record(line: str) -> None:
         with progress.open("a", encoding="utf-8") as handle:
@@ -559,11 +571,17 @@ def swap(store: Path, txn_dir: Path, staged: list[StagedStore], txn_id: str) -> 
             _move_no_replace(live_file, aside)
             _fsync_dir(live_file.parent)
             record(f"moved-aside   {staged_store.destination}")
+            step[0] += 1
+            if after_step is not None:
+                after_step(step[0])
 
         live_dir.mkdir(parents=True, exist_ok=True)
         _move_no_replace(staged_store.path, live_file)
         _fsync_dir(live_file.parent)
         record(f"installed     {staged_store.destination}")
+        step[0] += 1
+        if after_step is not None:
+            after_step(step[0])
 
     checkpoints = store / "checkpoints"
     if checkpoints.exists():

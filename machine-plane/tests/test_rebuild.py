@@ -316,3 +316,118 @@ class TestRecoveryValidatesBeforeMutating(RebuildTestCase):
             "new legacy",
         )
         self.assertFalse((txn / "ROLLED_BACK").exists())
+
+
+class Crash(Exception):
+    """Simulated interruption at a durable boundary."""
+
+
+class TestCrashBoundaries(RebuildTestCase):
+    """Every rename boundary, driven by a fault injected at the real step.
+
+    The point is not that swap() can be interrupted — it can — but that any interruption
+    leaves exactly one complete generation and is recoverable.
+    """
+
+    def build(self) -> tuple[Path, list, Path]:
+        self.make_corpus(
+            [("seg-ev", "supported-by-artifact", 1), ("seg-lg", "no-artifact", 1)]
+        )
+        for destination in rebuild.DESTINATIONS:
+            self.store.joinpath(destination).mkdir(parents=True, exist_ok=True)
+            self.store.joinpath(destination, "events.ndjson").write_text(
+                f"old {destination}", encoding="utf-8"
+            )
+        plan = self.plan()
+        staged, meta = rebuild.stage(self.snapshot, plan, self.root / "staging")
+        txn = rebuild.write_transaction(
+            self.store,
+            plan,
+            staged,
+            rebuild.Quiescence(lock_path=self.root / "lock", evidence={}),
+            {"required_bytes": 0, "free_bytes": 1},
+        )
+        return txn, staged, plan
+
+    def crash_at(self, txn, staged, step_number: int) -> None:
+        def fault(step: int) -> None:
+            if step == step_number:
+                raise Crash(f"interrupted after step {step}")
+
+        with self.assertRaises(Crash):
+            rebuild.swap(self.store, txn, staged, txn.name, after_step=fault)
+
+    def contents(self) -> dict[str, str]:
+        return {
+            destination: (
+                self.store / destination / "events.ndjson"
+            ).read_text(encoding="utf-8")
+            for destination in rebuild.DESTINATIONS
+            if (self.store / destination / "events.ndjson").exists()
+        }
+
+    def test_before_the_manifest_is_durable_nothing_moves(self) -> None:
+        self.make_corpus([("seg-ev", "supported-by-artifact", 1)])
+        for destination in rebuild.DESTINATIONS:
+            self.store.joinpath(destination).mkdir(parents=True, exist_ok=True)
+            self.store.joinpath(destination, "events.ndjson").write_text(
+                f"old {destination}", encoding="utf-8"
+            )
+        # Staged, but the transaction was never written and swap was never called.
+        plan = self.plan()
+        rebuild.stage(self.snapshot, plan, self.root / "staging")
+
+        self.assertEqual(rebuild.recover(self.store), "nothing to recover")
+        self.assertEqual(
+            self.contents()["evidence"], "old evidence", "a live store was touched"
+        )
+
+    def test_interrupted_after_moved_aside_restores_the_old_generation(self) -> None:
+        txn, staged, _ = self.build()
+
+        self.crash_at(txn, staged, 1)
+
+        rebuild.recover(self.store)
+        self.assertEqual(self.contents()["evidence"], "old evidence")
+        self.assertEqual(self.contents()["control"], "old control")
+
+    def test_interrupted_after_one_install_restores_every_store(self) -> None:
+        txn, staged, _ = self.build()
+
+        self.crash_at(txn, staged, 2)   # evidence installed, control/legacy untouched
+
+        rebuild.recover(self.store)
+        self.assertEqual(
+            self.contents(),
+            {
+                "evidence": "old evidence",
+                "control": "old control",
+                "legacy": "old legacy",
+            },
+        )
+
+    def test_interrupted_after_all_installs_before_complete_restores_old(self) -> None:
+        txn, staged, _ = self.build()
+
+        self.crash_at(txn, staged, 6)   # all six renames done, COMPLETE not written
+
+        rebuild.recover(self.store)
+        self.assertEqual(
+            self.contents(),
+            {
+                "evidence": "old evidence",
+                "control": "old control",
+                "legacy": "old legacy",
+            },
+        )
+        self.assertFalse((txn / "COMPLETE").exists())
+
+    def test_after_complete_the_new_generation_stands(self) -> None:
+        txn, staged, _ = self.build()
+
+        rebuild.swap(self.store, txn, staged, txn.name)
+
+        self.assertTrue((txn / "COMPLETE").exists())
+        self.assertEqual(rebuild.recover(self.store), "nothing to recover")
+        # The new evidence store holds the rebuilt content, not the old placeholder.
+        self.assertNotEqual(self.contents()["evidence"], "old evidence")
