@@ -100,8 +100,19 @@ Each check must pass, and each is reported whether it passes or fails.
   manifest, not by trusting the writer.
 - **Provenance re-check.** For every segment contributing to the evidence store, the
   artifact still exists and its hash matches the manifest's.
-- **Content preservation.** The concatenation of the three staging stores preserves
-  every source record's payload byte-for-byte; only the destination differs.
+- **Content preservation, by record key.** The three destination stores reorder records
+  relative to the source, so concatenated bytes cannot equal the source byte sequence —
+  an earlier draft asserted exactly that and it was wrong. The check is per record:
+  every source `record_key` appears exactly once across the destinations, and for that
+  key the raw payload bytes are byte-identical to the source record's. Nothing is
+  compared by position.
+- **Ordering.** Records are written in source order, so each destination store is a
+  stable subsequence of the source: relative order is preserved within every store.
+  Order across stores is not part of the contract — the record key carries the segment
+  and offset, which is the ordering that identifies a record. The subsequence property
+  is verified, not assumed.
+- **Destination integrity.** Each destination store's record count, byte size and
+  SHA-256 match the transaction manifest.
 - **Refusal behaviour.** After the swap, confirm the importer still refuses: a legacy
   segment as evidence; a control segment in the evidence path; a filtered segment in the
   control store; and a mode-less segment anywhere but `--legacy`.
@@ -128,10 +139,21 @@ evidence:
 - acquire `store/.rebuild.lock` with `O_CREAT|O_EXCL`; a second rebuild refuses;
 - confirm no `machine-plane-recorder` process is running;
 - confirm no `machine-plane-import` process is running;
-- confirm the spool holds no `.partial` younger than the lock acquisition;
+- confirm the spool holds **no `.partial` file at all**;
 - record all four facts, with timestamps, in the transaction manifest.
 
 If any check fails, the rebuild refuses. It does not wait and it does not retry.
+
+**On partials: no age rule.** An earlier draft refused only partials younger than the
+lock, which assumed an old partial was irrelevant. It is not. A partial is by definition
+a run that did not seal, and an unsealed run is precisely the thing that leaves artifacts
+which do not match the records taken from them — the condition this rebuild exists to
+clean up. Age says nothing about relevance, so age is not consulted.
+
+The remedy is explicit and belongs to the operator: run `machine-plane-recorder recover`
+first, which seals or reports each partial. Whatever it resolves is recorded in the
+transaction manifest, so the rebuild states what was there rather than silently
+proceeding past it.
 
 ### 6a.2 Disk-space preflight
 
