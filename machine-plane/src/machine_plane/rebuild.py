@@ -631,34 +631,23 @@ def read_progress(txn_dir: Path) -> dict[str, list[str]]:
     return per
 
 
-def recover(store: Path) -> str:
-    """Roll back an interrupted swap, using the progress log to know what was done.
+def _plan_recovery(
+    store: Path, superseded: Path, per: dict[str, list[str]]
+) -> list[tuple[str, str, Path, Path]]:
+    """Validate every destination before anything is touched.
 
-    Roll-forward is deliberately absent: completing a partial swap means trusting staged
-    files whose installation was interrupted, and choosing to finish is a judgement about
-    which generation is real. Rollback is always available because the previous generation
-    is only ever renamed.
-
-    The log is the authority on what happened, and the filesystem must agree with it. A
-    state the log explains is undone; a state it does not explain is a refusal.
+    Recovery deletes files, so every precondition is checked in one pass first. Mutating
+    and then discovering a missing counterpart is how a recovery turns a bad state into an
+    unrecoverable one: the previous generation would already be gone.
     """
-    txn_dir = incomplete_transaction(store)
-    if txn_dir is None:
-        return "nothing to recover"
-
-    txn_id = txn_dir.name
-    superseded = store / f"superseded-{txn_id}"
-    per = read_progress(txn_dir)
-    restored: list[str] = []
-    removed: list[str] = []
+    actions: list[tuple[str, str, Path, Path]] = []
 
     for destination in DESTINATIONS:
         live = store / destination / "events.ndjson"
         aside = superseded / destination
-        actions = tuple(per[destination])
+        sequence = tuple(per[destination])
 
-        if actions == ():
-            # Untouched. Anything present for this destination contradicts the log.
+        if sequence == ():
             staged_left = list(
                 (store / ".rebuild-staging").glob(f"*/{destination}.ndjson")
             )
@@ -669,7 +658,7 @@ def recover(store: Path) -> str:
                 )
             continue
 
-        if actions == ("moved-aside",):
+        if sequence == ("moved-aside",):
             if not aside.exists():
                 raise RebuildRefused(
                     f"{destination}: log says moved-aside but no moved copy exists"
@@ -678,37 +667,90 @@ def recover(store: Path) -> str:
                 raise RebuildRefused(
                     f"{destination}: live copy present with no installed entry in the log"
                 )
-            live.parent.mkdir(parents=True, exist_ok=True)
-            os.rename(aside, live)
-            _fsync_dir(live.parent)
+            actions.append(("restore", destination, aside, live))
+
+        elif sequence == ("moved-aside", "installed"):
+            # Both are required BEFORE anything is removed. Checking the previous
+            # generation after deleting the new one would leave nothing at all.
+            if not live.exists():
+                raise RebuildRefused(
+                    f"{destination}: log says installed but no live store exists"
+                )
+            if not aside.exists():
+                raise RebuildRefused(
+                    f"{destination}: previous generation is missing, so rollback is "
+                    "impossible — refusing to remove the only remaining copy"
+                )
+            actions.append(("replace", destination, aside, live))
+
+        elif sequence == ("installed",):
+            if not live.exists():
+                raise RebuildRefused(
+                    f"{destination}: log says installed but no live store exists — the "
+                    "log and the filesystem disagree"
+                )
+            actions.append(("remove", destination, live, live))
+
+    # Checkpoints are validated with everything else, not after the stores have moved.
+    archived_checkpoints = superseded / "checkpoints"
+    live_checkpoints = store / "checkpoints"
+    if archived_checkpoints.exists() and live_checkpoints.exists():
+        raise RebuildRefused(
+            "both an archived and a live checkpoint directory exist — refusing to guess "
+            "which one belongs to the previous generation"
+        )
+
+    return actions
+
+
+def recover(store: Path) -> str:
+    """Roll back an interrupted swap, using the progress log to know what was done.
+
+    Roll-forward is deliberately absent: completing a partial swap means trusting staged
+    files whose installation was interrupted, and choosing to finish is a judgement about
+    which generation is real. Rollback is always available because the previous generation
+    is only ever renamed.
+
+    Two phases, in this order: validate every precondition, then mutate. A refusal in the
+    first phase changes nothing.
+    """
+    txn_dir = incomplete_transaction(store)
+    if txn_dir is None:
+        return "nothing to recover"
+
+    txn_id = txn_dir.name
+    superseded = store / f"superseded-{txn_id}"
+    per = read_progress(txn_dir)
+
+    actions = _plan_recovery(store, superseded, per)
+
+    restored: list[str] = []
+    removed: list[str] = []
+    for kind, destination, source, target in actions:
+        if kind == "restore":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(source, target)
+            _fsync_dir(target.parent)
             restored.append(destination)
+        elif kind == "replace":
+            os.unlink(target)
+            _fsync_dir(target.parent)
+            os.rename(source, target)
+            _fsync_dir(target.parent)
+            removed.append(destination)
+            restored.append(destination)
+        elif kind == "remove":
+            os.unlink(target)
+            _fsync_dir(target.parent)
+            removed.append(destination)
 
-        elif actions in (("moved-aside", "installed"), ("installed",)):
-            # The installed generation is what rollback removes.
-            if live.exists():
-                os.unlink(live)
-                _fsync_dir(live.parent)
-                removed.append(destination)
-            if actions == ("moved-aside", "installed"):
-                if not aside.exists():
-                    raise RebuildRefused(
-                        f"{destination}: previous generation is missing, so rollback is "
-                        "impossible — refusing to leave a half-restored store"
-                    )
-                live.parent.mkdir(parents=True, exist_ok=True)
-                os.rename(aside, live)
-                _fsync_dir(live.parent)
-                restored.append(destination)
-
-    if (superseded / "checkpoints").exists():
-        target = store / "checkpoints"
-        if not target.exists():
-            os.rename(superseded / "checkpoints", target)
-            _fsync_dir(store)
+    archived_checkpoints = superseded / "checkpoints"
+    if archived_checkpoints.exists():
+        os.rename(archived_checkpoints, store / "checkpoints")
+        _fsync_dir(store)
 
     _write_durably(txn_dir / "ROLLED_BACK", txn_id)
     return (
         f"rolled back {txn_id}: removed {', '.join(removed) or 'nothing'}; "
         f"restored {', '.join(restored) or 'nothing'}"
     )
-

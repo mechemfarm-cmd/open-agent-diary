@@ -225,3 +225,94 @@ class TestRecoveryIsProgressAware(RebuildTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestRecoveryValidatesBeforeMutating(RebuildTestCase):
+    """A refusal must change nothing. Recovery deletes files, so order matters."""
+
+    def setup_txn(self, progress_lines: list[str]) -> tuple[Path, Path]:
+        for destination in rebuild.DESTINATIONS:
+            self.store.joinpath(destination).mkdir(parents=True, exist_ok=True)
+        txn = self.store / ".rebuild-txn" / "t1"
+        txn.mkdir(parents=True)
+        (txn / "txn.json").write_text("{}", encoding="utf-8")
+        (txn / "progress.log").write_text(
+            "".join(line + "\n" for line in progress_lines), encoding="utf-8"
+        )
+        superseded = self.store / "superseded-t1"
+        superseded.mkdir(parents=True)
+        return txn, superseded
+
+    def test_missing_previous_generation_does_not_delete_the_live_one(self) -> None:
+        """moved-aside + installed, but the moved copy is gone: the live one is all we have."""
+        txn, _superseded = self.setup_txn(
+            ["moved-aside   evidence", "installed     evidence"]
+        )
+        live = self.store / rebuild.EVIDENCE / "events.ndjson"
+        live.write_text("the only remaining generation", encoding="utf-8")
+
+        with self.assertRaises(rebuild.RebuildRefused):
+            rebuild.recover(self.store)
+
+        self.assertTrue(live.exists(), "recovery deleted the only surviving generation")
+        self.assertEqual(
+            live.read_text(encoding="utf-8"), "the only remaining generation"
+        )
+        self.assertFalse((txn / "ROLLED_BACK").exists())
+
+    def test_installed_with_a_missing_live_store_is_refused(self) -> None:
+        """The log claims an install that is not on disk; that contradicts, not succeeds."""
+        txn, _superseded = self.setup_txn(["installed     evidence"])
+
+        with self.assertRaises(rebuild.RebuildRefused):
+            rebuild.recover(self.store)
+
+        self.assertFalse(
+            (txn / "ROLLED_BACK").exists(),
+            "a refused recovery must not be marked rolled back",
+        )
+
+    def test_an_explained_rollback_still_works(self) -> None:
+        txn, superseded = self.setup_txn(
+            ["moved-aside   evidence", "installed     evidence"]
+        )
+        superseded.joinpath(rebuild.EVIDENCE).write_text("old", encoding="utf-8")
+        self.store.joinpath(rebuild.EVIDENCE, "events.ndjson").write_text(
+            "new", encoding="utf-8"
+        )
+
+        rebuild.recover(self.store)
+
+        self.assertEqual(
+            (self.store / rebuild.EVIDENCE / "events.ndjson").read_text(
+                encoding="utf-8"
+            ),
+            "old",
+        )
+        self.assertTrue((txn / "ROLLED_BACK").exists())
+
+    def test_a_failed_precondition_mutates_nothing_anywhere(self) -> None:
+        """One bad destination must stop the whole recovery before any file moves."""
+        txn, superseded = self.setup_txn(
+            [
+                "moved-aside   evidence",
+                "moved-aside   legacy",
+                "installed     legacy",
+            ]
+        )
+        superseded.joinpath(rebuild.EVIDENCE).write_text("old evidence", encoding="utf-8")
+        # legacy says installed but its previous generation is missing.
+        self.store.joinpath(rebuild.LEGACY, "events.ndjson").write_text(
+            "new legacy", encoding="utf-8"
+        )
+
+        with self.assertRaises(rebuild.RebuildRefused):
+            rebuild.recover(self.store)
+
+        # evidence was a valid restore candidate, but must not have been touched.
+        self.assertTrue(superseded.joinpath(rebuild.EVIDENCE).exists())
+        self.assertFalse((self.store / rebuild.EVIDENCE / "events.ndjson").exists())
+        self.assertEqual(
+            (self.store / rebuild.LEGACY / "events.ndjson").read_text(encoding="utf-8"),
+            "new legacy",
+        )
+        self.assertFalse((txn / "ROLLED_BACK").exists())
