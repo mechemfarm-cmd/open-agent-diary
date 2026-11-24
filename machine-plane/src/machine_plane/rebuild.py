@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import grp
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,10 @@ ROUTING = {
 NEVER_PROMOTED = frozenset({"artifact-mismatch", "no-artifact"})
 
 HEADROOM = 0.10
+
+#: The live store's ownership and mode; staged output must match it.
+FILE_MODE = 0o640
+READ_GROUP = "mp-read"
 
 
 class RebuildRefused(RuntimeError):
@@ -344,6 +349,12 @@ def stage(snapshot: Path, plan: Plan, staging_dir: Path) -> tuple[list[StagedSto
     staged: list[StagedStore] = []
     for destination in DESTINATIONS:
         path = staging_dir / f"{destination}.ndjson"
+        # Match the live store before the swap rather than relying on umask.
+        os.chmod(path, FILE_MODE)
+        try:
+            os.chown(path, 0, grp.getgrnam(READ_GROUP).gr_gid)
+        except (KeyError, PermissionError):
+            pass
         staged.append(
             StagedStore(
                 destination=destination,
@@ -441,6 +452,23 @@ def verify(
     for staged_store in staged:
         if staged_store.bytes != staged_store.path.stat().st_size:
             problems.append(f"{staged_store.destination}: byte count changed")
+        mode = staged_store.path.stat().st_mode & 0o777
+        if mode != FILE_MODE:
+            problems.append(
+                f"{staged_store.destination}: mode {oct(mode)}, expected {oct(FILE_MODE)}"
+            )
+        try:
+            expected_gid = grp.getgrnam(READ_GROUP).gr_gid
+        except KeyError:
+            expected_gid = None
+        # A non-root staging run cannot chown, so enforce the group only where it
+        # was actually settable.
+        if (
+            os.geteuid() == 0
+            and expected_gid is not None
+            and staged_store.path.stat().st_gid != expected_gid
+        ):
+            problems.append(f"{staged_store.destination}: group does not match {READ_GROUP}")
         if staged_store.sha256 != sha256_file(staged_store.path):
             problems.append(f"{staged_store.destination}: hash changed after staging")
 
